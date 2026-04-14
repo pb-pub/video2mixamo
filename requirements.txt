@@ -1,0 +1,13 @@
+# Core dependencies for Video to Maximo
+mediapipe>=0.10.21
+opencv-python>=4.8
+numpy>=1.24
+scipy>=1.11
+bvhio>=1.5
+
+# Optional dependencies
+# For FBX export (requires Python 3.11 for bpy 4.x)
+# bpy>=4.1
+
+# Development dependencies
+# pytest>=7.0
