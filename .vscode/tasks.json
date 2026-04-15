@@ -1,0 +1,172 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Download Models",
+      "type": "shell",
+      "command": ".venv\\Scripts\\python.exe",
+      "args": [
+        "scripts/download_models.py"
+      ],
+      "problemMatcher": [],
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      }
+    },
+    {
+      "label": "Download Models - Lite",
+      "type": "shell",
+      "command": ".venv\\Scripts\\python.exe",
+      "args": [
+        "scripts/download_models.py",
+        "lite"
+      ],
+      "problemMatcher": []
+    },
+    {
+      "label": "Download Models - Heavy",
+      "type": "shell",
+      "command": ".venv\\Scripts\\python.exe",
+      "args": [
+        "scripts/download_models.py",
+        "heavy"
+      ],
+      "problemMatcher": []
+    },
+    {
+      "label": "Run with Webcam",
+      "type": "shell",
+      "command": ".venv\\Scripts\\python.exe",
+      "args": [
+        "src/main.py"
+      ],
+      "problemMatcher": [],
+      "group": "test"
+    },
+    {
+      "label": "Run with Webcam - No Preview",
+      "type": "shell",
+      "command": ".venv\\Scripts\\python.exe",
+      "args": [
+        "src/main.py",
+        "--no-preview"
+      ],
+      "problemMatcher": [],
+      "group": "test"
+    },
+    {
+      "label": "Run with Video File",
+      "type": "shell",
+      "command": ".venv\\Scripts\\python.exe",
+      "args": [
+        "src/main.py",
+        "--input",
+        "",
+        "--output",
+        "animation_output.bvh"
+      ],
+      "problemMatcher": [],
+      "group": "test"
+    },
+    {
+      "label": "Process Video with Smoothing",
+      "type": "shell",
+      "command": ".venv\\Scripts\\python.exe",
+      "args": [
+        "src/main.py",
+        "--input",
+        "",
+        "--output",
+        "animation_smooth.bvh"
+      ],
+      "problemMatcher": [],
+      "group": "test"
+    },
+    {
+      "label": "Process Video - No Smoothing",
+      "type": "shell",
+      "command": ".venv\\Scripts\\python.exe",
+      "args": [
+        "src/main.py",
+        "--input",
+        "",
+        "--output",
+        "animation_raw.bvh",
+        "--no-smooth"
+      ],
+      "problemMatcher": [],
+      "group": "test"
+    },
+    {
+      "label": "Test Filter Module",
+      "type": "shell",
+      "command": ".venv\\Scripts\\python.exe",
+      "args": [
+        "src/filter.py"
+      ],
+      "problemMatcher": []
+    },
+    {
+      "label": "Test Rotation Module",
+      "type": "shell",
+      "command": ".venv\\Scripts\\python.exe",
+      "args": [
+        "src/rotation.py"
+      ],
+      "problemMatcher": []
+    },
+    {
+      "label": "Test BVH Exporter",
+      "type": "shell",
+      "command": ".venv\\Scripts\\python.exe",
+      "args": [
+        "src/exporter_bvh.py"
+      ],
+      "problemMatcher": []
+    },
+    {
+      "label": "Preview BVH Animation",
+      "type": "shell",
+      "command": ".venv\\Scripts\\python.exe",
+      "args": [
+        "src/bvh_previewer.py",
+        "--list"
+      ],
+      "problemMatcher": []
+    },
+    {
+      "label": "Preview BVH Animation - Recent",
+      "type": "shell",
+      "command": ".venv\\Scripts\\python.exe",
+      "args": [
+        "src/bvh_previewer.py"
+      ],
+      "problemMatcher": []
+    },
+    {
+      "label": "Install Dependencies",
+      "type": "shell",
+      "command": ".venv\\Scripts\\python.exe",
+      "args": [
+        "-m",
+        "pip",
+        "install",
+        "-r",
+        "requirements.txt"
+      ],
+      "problemMatcher": [],
+      "group": "build"
+    },
+    {
+      "label": "Help",
+      "type": "shell",
+      "command": ".venv\\Scripts\\python.exe",
+      "args": [
+        "src/main.py",
+        "--help"
+      ],
+      "problemMatcher": []
+    }
+  ]
+}
