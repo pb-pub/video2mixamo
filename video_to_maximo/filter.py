@@ -161,13 +161,13 @@ class Smoother:
         Filter all landmarks at a given timestamp.
 
         Args:
-            landmarks: 33x3 list of [x, y, z] positions
+            landmarks: 40x3 list of [x, y, z] positions (33 base + 7 augmented)
             timestamp_ms: Timestamp in milliseconds
 
         Returns:
-            Filtered landmarks (33x3)
+            Filtered landmarks (40x3)
         """
-        if len(landmarks) != 33:
+        if len(landmarks) != 40:
             return landmarks
 
         filtered = []

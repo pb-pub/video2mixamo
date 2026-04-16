@@ -214,11 +214,14 @@ class VideoToMixamo:
         self._last_result: Optional[PoseResult] = None  # Store last detection result
 
         # Optional Mixamo character — load before creating the visualizer
+        self._character: Optional[MixamoCharacter] = None
         character_mesh = None
         if getattr(args, "character", None):
             try:
                 char = MixamoCharacter(args.character)
                 character_mesh = (char.vertices, char.faces)
+                if char.can_animate:
+                    self._character = char
             except Exception as e:
                 print(f"[character] Failed to load {args.character}: {e}")
 
@@ -296,6 +299,14 @@ class VideoToMixamo:
                 result.pose_world_landmarks,
                 result.visibility,
             )
+            if self._character is not None:
+                try:
+                    verts = self._character.compute_skinned_vertices(
+                        result.pose_world_landmarks
+                    )
+                    self._viz3d.update_mesh(verts, self._character.faces)
+                except Exception:
+                    pass
 
         return result.success
 
@@ -342,7 +353,7 @@ class VideoToMixamo:
         valid_indices = []
 
         for i, landmarks in enumerate(self.recorded_landmarks):
-            if landmarks is not None and len(landmarks) == 33:
+            if landmarks is not None and len(landmarks) == 40:
                 rotation_result = rotation_computer.compute_rotations(
                     landmarks, self.recorded_timestamps[i], self.recorded_visibility[i]
                 )

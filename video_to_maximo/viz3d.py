@@ -34,45 +34,108 @@ import numpy as np
 # ---------------------------------------------------------------------------
 _CONNECTIONS: List[Tuple[int, int]] = [
     # Face outline
-    (0, 1), (1, 2), (2, 3), (3, 7),    # nose → left eye → ear
-    (0, 4), (4, 5), (5, 6), (6, 8),    # nose → right eye → ear
-    (9, 10),                             # mouth corners
+    (0, 1),
+    (1, 2),
+    (2, 3),
+    (3, 7),  # nose → left eye → ear
+    (0, 4),
+    (4, 5),
+    (5, 6),
+    (6, 8),  # nose → right eye → ear
+    (9, 10),  # mouth corners
     # Torso
-    (11, 12),                            # shoulders
-    (11, 23), (12, 24),                  # shoulder → hip
-    (23, 24),                            # hips
+    (11, 12),  # shoulders
+    (11, 23),
+    (12, 24),  # shoulder → hip
+    (23, 24),  # hips
     # Left arm
-    (11, 13), (13, 15),
-    (15, 17), (15, 19), (15, 21),        # wrist → fingers
+    (11, 13),
+    (13, 15),
+    (15, 17),
+    (15, 19),
+    (15, 21),  # wrist → fingers
     (17, 19),
     # Right arm
-    (12, 14), (14, 16),
-    (16, 18), (16, 20), (16, 22),        # wrist → fingers
+    (12, 14),
+    (14, 16),
+    (16, 18),
+    (16, 20),
+    (16, 22),  # wrist → fingers
     (18, 20),
     # Left leg
-    (23, 25), (25, 27),
-    (27, 29), (29, 31), (27, 31),        # ankle → heel/foot
+    (23, 25),
+    (25, 27),
+    (27, 29),
+    (29, 31),
+    (27, 31),  # ankle → heel/foot
     # Right leg
-    (24, 26), (26, 28),
-    (28, 30), (30, 32), (28, 32),        # ankle → heel/foot
+    (24, 26),
+    (26, 28),
+    (28, 30),
+    (30, 32),
+    (28, 32),  # ankle → heel/foot
+    # Augmented landmarks connections (dashed lines for reference)
+    (17, 33),  # left pinky → left ring finger
+    (18, 34),  # right pinky → right ring finger
+    (19, 35),  # left index → left middle finger
+    (20, 36),  # right index → right middle finger
+    (23, 37),  # left hip → bottom spine (midpoint of hips)
+    (11, 38),  # left shoulder → top spine (midpoint of shoulders)
+    (7, 39),  # left ear → top neck (midpoint of ears)
 ]
 
 # Indices considered part of the right side (red tint)
-_RIGHT_INDICES = {4, 5, 6, 8, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30, 32}
+_RIGHT_INDICES = {
+    4,
+    5,
+    6,
+    8,
+    12,
+    14,
+    16,
+    18,
+    20,
+    22,
+    24,
+    26,
+    28,
+    30,
+    32,
+    34,
+    36,
+}
 # Indices considered part of the left side (blue tint)
-_LEFT_INDICES  = {1, 2, 3, 7, 11, 13, 15, 17, 19, 21, 23, 25, 27, 29, 31}
+_LEFT_INDICES = {
+    1,
+    2,
+    3,
+    7,
+    11,
+    13,
+    15,
+    17,
+    19,
+    21,
+    23,
+    25,
+    27,
+    29,
+    31,
+    33,
+    35,
+}
 
 
-def _joint_colors(n: int = 33) -> np.ndarray:
+def _joint_colors(n: int = 40) -> np.ndarray:
     """Build per-joint RGBA color array (left=cyan, right=red, center=white)."""
     colors = np.ones((n, 4), dtype=np.float32)
-    colors[:, :] = (1.0, 1.0, 1.0, 1.0)           # default white
+    colors[:, :] = (1.0, 1.0, 1.0, 1.0)  # default white
     for i in _LEFT_INDICES:
         if i < n:
-            colors[i] = (0.2, 0.8, 1.0, 1.0)       # cyan
+            colors[i] = (0.2, 0.8, 1.0, 1.0)  # cyan
     for i in _RIGHT_INDICES:
         if i < n:
-            colors[i] = (1.0, 0.35, 0.35, 1.0)     # red
+            colors[i] = (1.0, 0.35, 0.35, 1.0)  # red
     return colors
 
 
@@ -100,8 +163,11 @@ class Pose3DVisualizer:
         character_mesh: Optional[Tuple[np.ndarray, np.ndarray]] = None,
     ):
         self._window_size = window_size
-        self._character_mesh = character_mesh  # static, set once at init
+        self._character_mesh = (
+            character_mesh  # static T-pose, shown until first anim frame
+        )
         self._queue: queue.Queue = queue.Queue(maxsize=4)
+        self._mesh_queue: queue.Queue = queue.Queue(maxsize=2)
         self._thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
 
@@ -119,9 +185,7 @@ class Pose3DVisualizer:
         if self.is_running:
             return
         self._stop_event.clear()
-        self._thread = threading.Thread(
-            target=self._run_qt, daemon=True, name="viz3d"
-        )
+        self._thread = threading.Thread(target=self._run_qt, daemon=True, name="viz3d")
         self._thread.start()
 
     def close(self) -> None:
@@ -136,6 +200,30 @@ class Pose3DVisualizer:
         self.open()
         return True
 
+    def update_mesh(self, vertices: "np.ndarray", faces: "np.ndarray") -> None:
+        """
+        Push animated mesh vertices for the character.
+
+        Called once per frame when landmarks are available.
+        On first call the static T-pose mesh is replaced by this data.
+
+        Parameters
+        ----------
+        vertices : (N,3) float32 — deformed vertices in display space.
+        faces    : (F,3) int32  — unchanged triangle indices.
+        """
+        if not self.is_running:
+            return
+        while True:
+            try:
+                self._mesh_queue.get_nowait()
+            except queue.Empty:
+                break
+        try:
+            self._mesh_queue.put_nowait((vertices, faces))
+        except queue.Full:
+            pass
+
     def update_landmarks(
         self,
         world_landmarks: List[List[float]],
@@ -147,9 +235,9 @@ class Pose3DVisualizer:
         Parameters
         ----------
         world_landmarks : list of [x, y, z]
-            33 MediaPipe world-space pose landmarks (meters, Y-up).
+            40 MediaPipe world-space pose landmarks (33 base + 7 augmented).
         visibility : list of float, optional
-            Per-landmark visibility scores [0, 1].
+            Per-landmark visibility scores [0, 1] for base 33 landmarks.
         """
         if not self.is_running or world_landmarks is None:
             return
@@ -189,7 +277,9 @@ class Pose3DVisualizer:
                 app = QtWidgets.QApplication([])
 
             w = gl.GLViewWidget()
-            w.setWindowTitle("3D Pose Landmarks  |  drag=rotate  scroll=zoom  ctrl+drag=pan")
+            w.setWindowTitle(
+                "3D Pose Landmarks  |  drag=rotate  scroll=zoom  ctrl+drag=pan"
+            )
             w.resize(*self._window_size)
             w.show()
             # Initial camera: looking slightly from above and to the side
@@ -207,10 +297,11 @@ class Pose3DVisualizer:
             axis.setSize(0.25, 0.25, 0.25)
             w.addItem(axis)
 
-            # ---- optional static character mesh ----
+            # ---- character mesh (static T-pose until first animated frame) ----
+            _char_item: Optional[gl.GLMeshItem] = None
             if self._character_mesh is not None:
                 char_verts, char_faces = self._character_mesh
-                char_item = gl.GLMeshItem(
+                _char_item = gl.GLMeshItem(
                     vertexes=char_verts,
                     faces=char_faces,
                     smooth=True,
@@ -218,12 +309,12 @@ class Pose3DVisualizer:
                     color=(0.75, 0.65, 0.55, 0.85),
                     shader="normalColor",
                 )
-                w.addItem(char_item)
+                w.addItem(_char_item)
 
             # ---- joints ----
-            _colors = _joint_colors(33)
+            _colors = _joint_colors(40)
             scatter = gl.GLScatterPlotItem(
-                pos=np.zeros((33, 3), dtype=np.float32),
+                pos=np.zeros((40, 3), dtype=np.float32),
                 color=_colors,
                 size=10,
                 pxMode=True,
@@ -246,19 +337,40 @@ class Pose3DVisualizer:
 
             # ---- timer-driven update ----
             def _tick() -> None:
+                nonlocal _char_item
+
                 if self._stop_event.is_set():
                     _timer.stop()
                     w.close()
                     app.quit()
                     return
 
+                # ---- animated mesh update (independent of landmark queue) ----
+                try:
+                    anim_verts, anim_faces = self._mesh_queue.get_nowait()
+                    if _char_item is None:
+                        _char_item = gl.GLMeshItem(
+                            vertexes=anim_verts,
+                            faces=anim_faces,
+                            smooth=True,
+                            drawEdges=False,
+                            color=(0.75, 0.65, 0.55, 0.85),
+                            shader="normalColor",
+                        )
+                        w.addItem(_char_item)
+                    else:
+                        _char_item.setMeshData(vertexes=anim_verts, faces=anim_faces)
+                except queue.Empty:
+                    pass
+
+                # ---- landmark update ----
                 try:
                     data = self._queue.get_nowait()
                 except queue.Empty:
                     return
 
                 world_lms, vis = data
-                if not world_lms or len(world_lms) != 33:
+                if not world_lms or len(world_lms) != 40:
                     return
 
                 # Convert to numpy.
@@ -274,14 +386,32 @@ class Pose3DVisualizer:
                 )
 
                 # Build per-joint visibility mask
-                vis_ok = np.ones(33, dtype=bool)
-                if vis and len(vis) == 33:
-                    for i, v in enumerate(vis):
-                        vis_ok[i] = float(v) >= _VIS_THRESHOLD
+                vis_ok = np.ones(40, dtype=bool)
+                if vis is not None:
+                    # Handle both 33 (base) and 40 (base+augmented) visibility lists
+                    if len(vis) >= 40:
+                        for i, v in enumerate(vis):
+                            vis_ok[i] = float(v) >= _VIS_THRESHOLD
+                    elif len(vis) >= 33:
+                        # Map base landmarks visibility to first 33 points
+                        for i in range(33):
+                            vis_ok[i] = float(vis[i]) >= _VIS_THRESHOLD
+                        # Augmented landmarks inherit visibility from nearest base landmarks
+                        # Index 33-36: fingers (inherit from 17-20)
+                        vis_ok[33] = vis_ok[17]
+                        vis_ok[34] = vis_ok[18]
+                        vis_ok[35] = vis_ok[19]
+                        vis_ok[36] = vis_ok[20]
+                        # Index 37: bottom spine (inherit from 23,24)
+                        vis_ok[37] = min(vis_ok[23], vis_ok[24])
+                        # Index 38: top spine (inherit from 11,12)
+                        vis_ok[38] = min(vis_ok[11], vis_ok[12])
+                        # Index 39: top neck (inherit from 7,8)
+                        vis_ok[39] = min(vis_ok[7], vis_ok[8])
 
                 # Hide joints below threshold (alpha = 0)
-                colors = _joint_colors(33).copy()
-                for i in range(33):
+                colors = _joint_colors(40).copy()
+                for i in range(40):
                     colors[i, 3] = 1.0 if vis_ok[i] else 0.0
                 scatter.setData(pos=pts, color=colors)
 
@@ -298,7 +428,7 @@ class Pose3DVisualizer:
 
             _timer = QtCore.QTimer()
             _timer.timeout.connect(_tick)
-            _timer.start(33)   # ~30 fps polling
+            _timer.start(33)  # ~30 fps polling
 
             app.exec_()
 

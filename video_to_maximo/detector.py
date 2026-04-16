@@ -26,6 +26,8 @@ from mediapipe.tasks.python import BaseOptions, vision
 
 from .config import MODEL_DIR, DEFAULT_MODEL
 
+from .vector import Vector3
+
 
 @dataclass
 class PoseResult:
@@ -35,17 +37,19 @@ class PoseResult:
     Attributes:
         success: Whether detection was successful
         timestamp_ms: Timestamp of the frame in milliseconds
-        pose_landmarks: List of [x, y, z] for each of 33 landmarks
-        pose_world_landmarks: List of [x, y, z] in meters (world coordinates)
-        visibility: List of visibility scores (0-1) for each landmark
+        pose_landmarks: List of [x, y, z] for each of 40 landmarks (33 base + 7 augmented)
+        pose_world_landmarks: List of [x, y, z] in meters (world coordinates) with 40 landmarks
+        visibility: List of visibility scores (0-1) for each of 33 base landmarks
         segmentation_mask: Optional segmentation mask (H, W)
     """
 
     success: bool
     timestamp_ms: float
-    pose_landmarks: Optional[List[List[float]]]  # 33 x [x, y, z]
-    pose_world_landmarks: Optional[List[List[float]]]  # 33 x [x, y, z]
-    visibility: Optional[List[float]]  # 33 visibility scores
+    pose_landmarks: Optional[List[Vector3]]  # 40 x [x, y, z] (33 base + 7 augmented)
+    pose_world_landmarks: Optional[
+        List[Vector3]
+    ]  # 40 x [x, y, z] (33 base + 7 augmented)
+    visibility: Optional[List[float]]  # 33 visibility scores (base landmarks only)
     segmentation_mask: Optional[np.ndarray] = None
 
 
@@ -166,8 +170,8 @@ class PoseLandmarker:
         landmarks = mp_result.pose_landmarks[0]
         world_landmarks = mp_result.pose_world_landmarks[0]
 
-        pose_landmarks = [[p.x, p.y, p.z] for p in landmarks]
-        pose_world_landmarks = [[p.x, p.y, p.z] for p in world_landmarks]
+        pose_landmarks = [Vector3(p.x, p.y, p.z) for p in landmarks]
+        pose_world_landmarks = [Vector3(p.x, p.y, p.z) for p in world_landmarks]
         visibility = [p.visibility for p in landmarks]
 
         # Get segmentation mask if available
@@ -175,6 +179,59 @@ class PoseLandmarker:
         if mp_result.segmentation_masks and self.options.output_segmentation_masks:
             mask_array = mp_result.segmentation_masks[0].numpy_view()
             segmentation_mask = mask_array
+
+        # Landmark Augmentation
+        # 33 = left ring finger tip (between pinky and index)
+        # 35 = left middle finger tip (between pinky and index)
+        # 34 = right ring finger tip (between pinky and index)
+        # 36 = right middle finger tip (between pinky and index)
+        # 37 = bottom spine (midpoint of hips)
+        # 38 = top spine / bottom neck (midpoint of shoulders)
+        # 39 = top neck / middle head (midpoint of ears)
+
+        # Augment pose_landmarks
+        pose_landmarks.append(
+            pose_landmarks[17] + ((pose_landmarks[19] - pose_landmarks[17]) / 3)
+        )
+        pose_landmarks.append(
+            pose_landmarks[18] + ((pose_landmarks[20] - pose_landmarks[18]) / 3)
+        )
+        pose_landmarks.append(
+            pose_landmarks[17] + ((pose_landmarks[19] - pose_landmarks[17]) * 2 / 3)
+        )
+        pose_landmarks.append(
+            pose_landmarks[18] + ((pose_landmarks[20] - pose_landmarks[18]) * 2 / 3)
+        )
+        pose_landmarks.append((pose_landmarks[23] + pose_landmarks[24]) / 2)
+        pose_landmarks.append((pose_landmarks[11] + pose_landmarks[12]) / 2)
+        pose_landmarks.append((pose_landmarks[7] + pose_landmarks[8]) / 2)
+
+        # Augment pose_world_landmarks with the SAME augmentations
+        pose_world_landmarks.append(
+            pose_world_landmarks[17]
+            + ((pose_world_landmarks[19] - pose_world_landmarks[17]) / 3)
+        )
+        pose_world_landmarks.append(
+            pose_world_landmarks[18]
+            + ((pose_world_landmarks[20] - pose_world_landmarks[18]) / 3)
+        )
+        pose_world_landmarks.append(
+            pose_world_landmarks[17]
+            + ((pose_world_landmarks[19] - pose_world_landmarks[17]) * 2 / 3)
+        )
+        pose_world_landmarks.append(
+            pose_world_landmarks[18]
+            + ((pose_world_landmarks[20] - pose_world_landmarks[18]) * 2 / 3)
+        )
+        pose_world_landmarks.append(
+            (pose_world_landmarks[23] + pose_world_landmarks[24]) / 2
+        )
+        pose_world_landmarks.append(
+            (pose_world_landmarks[11] + pose_world_landmarks[12]) / 2
+        )
+        pose_world_landmarks.append(
+            (pose_world_landmarks[7] + pose_world_landmarks[8]) / 2
+        )
 
         return PoseResult(
             success=True,
