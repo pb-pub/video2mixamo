@@ -18,6 +18,8 @@ from scipy.spatial.transform import Rotation as R
 
 from .skeleton import Skeleton, get_landmark_indices
 
+VISIBILITY_THRESHOLD = 0.5  # Landmarks below this score are considered unreliable
+
 
 @dataclass
 class RotationResult:
@@ -62,9 +64,13 @@ class RotationComputer:
         """
         self.skeleton = skeleton or Skeleton()
         self._landmark_indices = get_landmark_indices()
+        self._last_valid_rotations: Dict[str, np.ndarray] = {}
 
     def compute_rotations(
-        self, landmarks: List[List[float]], timestamp_ms: float
+        self,
+        landmarks: List[List[float]],
+        timestamp_ms: float,
+        visibility: Optional[List[float]] = None,
     ) -> RotationResult:
         """
         Compute bone rotations from landmarks.
@@ -72,6 +78,9 @@ class RotationComputer:
         Args:
             landmarks: 33x3 list of [x, y, z] positions
             timestamp_ms: Timestamp in milliseconds
+            visibility: Optional list of 33 visibility scores (0-1). Bones
+                whose key landmarks fall below VISIBILITY_THRESHOLD reuse the
+                last valid rotation instead of a potentially garbage value.
 
         Returns:
             RotationResult with bone rotations
@@ -96,6 +105,15 @@ class RotationComputer:
         # Convert to local-space rotations
         local_rotations = self._world_to_local_rotations(world_rotations)
 
+        # Apply hold for low-visibility bones: replace computed rotation with
+        # the last valid one to avoid garbage from MediaPipe's extrapolated positions.
+        for bone_name in list(local_rotations.keys()):
+            if self._bone_is_visible(bone_name, visibility):
+                self._last_valid_rotations[bone_name] = local_rotations[bone_name]
+            elif bone_name in self._last_valid_rotations:
+                local_rotations[bone_name] = self._last_valid_rotations[bone_name]
+            # else: never had a valid frame yet — keep computed value (best we can do)
+
         # Build bone rotations dict
         bone_rotations = {}
         for bone_name, rotation in local_rotations.items():
@@ -109,6 +127,17 @@ class RotationComputer:
             root_position=root_position.tolist(),
             bone_rotations=bone_rotations,
         )
+
+    def _bone_is_visible(
+        self, bone_name: str, visibility: Optional[List[float]]
+    ) -> bool:
+        """Return True if the bone's key landmarks meet the visibility threshold."""
+        if visibility is None or len(visibility) < 33:
+            return True  # No visibility data — assume visible to preserve existing behaviour
+        bone = self.skeleton.get_bone(bone_name)
+        if bone is None:
+            return True
+        return min(visibility[bone.start_landmark], visibility[bone.end_landmark]) >= VISIBILITY_THRESHOLD
 
     def _compute_world_rotations(
         self, positions: Dict[str, np.ndarray]

@@ -202,6 +202,7 @@ class VideoToMixamo:
         self.frames_captured = 0
         self.recorded_landmarks: List[List[List[float]]] = []
         self.recorded_timestamps: List[float] = []
+        self.recorded_visibility: List[Optional[List[float]]] = []
         self._last_result: Optional[PoseResult] = None  # Store last detection result
 
         # 3-D visualizer (opened on demand with V key)
@@ -289,9 +290,11 @@ class VideoToMixamo:
         # Store landmarks if detection was successful
         if self._last_result and self._last_result.success:
             self.recorded_landmarks.append(self._last_result.pose_world_landmarks)
+            self.recorded_visibility.append(self._last_result.visibility)
         else:
             # Store None for frames without detection (will be handled in export)
             self.recorded_landmarks.append(None)
+            self.recorded_visibility.append(None)
 
     def start_recording(self) -> None:
         """Start recording mode."""
@@ -299,6 +302,7 @@ class VideoToMixamo:
         self.frames_captured = 0
         self.recorded_landmarks = []
         self.recorded_timestamps = []
+        self.recorded_visibility = []
         print("Recording started...")
 
     def stop_recording(self) -> None:
@@ -323,7 +327,7 @@ class VideoToMixamo:
         for i, landmarks in enumerate(self.recorded_landmarks):
             if landmarks is not None and len(landmarks) == 33:
                 rotation_result = rotation_computer.compute_rotations(
-                    landmarks, self.recorded_timestamps[i]
+                    landmarks, self.recorded_timestamps[i], self.recorded_visibility[i]
                 )
                 if rotation_result.success:
                     frame_rotations.append(rotation_result)

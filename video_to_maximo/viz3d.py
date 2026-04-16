@@ -217,6 +217,8 @@ class Pose3DVisualizer:
             # ---- text overlay (basic info) ----
             # pyqtgraph GLViewWidget doesn't have built-in text; skip for simplicity
 
+            _VIS_THRESHOLD = 0.5
+
             # ---- timer-driven update ----
             def _tick() -> None:
                 if self._stop_event.is_set():
@@ -246,19 +248,28 @@ class Pose3DVisualizer:
                     dtype=np.float32,
                 )
 
-                # Update joint colors by visibility
-                colors = _joint_colors(33).copy()
+                # Build per-joint visibility mask
+                vis_ok = np.ones(33, dtype=bool)
                 if vis and len(vis) == 33:
                     for i, v in enumerate(vis):
-                        colors[i, 3] = max(0.15, float(v))   # alpha = visibility
+                        vis_ok[i] = float(v) >= _VIS_THRESHOLD
+
+                # Hide joints below threshold (alpha = 0)
+                colors = _joint_colors(33).copy()
+                for i in range(33):
+                    colors[i, 3] = 1.0 if vis_ok[i] else 0.0
                 scatter.setData(pos=pts, color=colors)
 
-                # Update bones
+                # Update bones — hide any bone where either endpoint is not visible
                 for idx, (a, b) in enumerate(_CONNECTIONS):
                     if a < len(pts) and b < len(pts):
-                        bone_items[idx].setData(
-                            pos=np.array([pts[a], pts[b]], dtype=np.float32)
-                        )
+                        if vis_ok[a] and vis_ok[b]:
+                            bone_items[idx].setData(
+                                pos=np.array([pts[a], pts[b]], dtype=np.float32)
+                            )
+                            bone_items[idx].setVisible(True)
+                        else:
+                            bone_items[idx].setVisible(False)
 
             _timer = QtCore.QTimer()
             _timer.timeout.connect(_tick)
