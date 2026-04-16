@@ -62,6 +62,7 @@ from .detector import PoseLandmarker, DetectorError, PoseResult
 from .rotation import RotationComputer
 from .exporter_bvh import BVHExporter
 from .filter import Smoother, FilterConfig
+from .viz3d import Pose3DVisualizer
 
 
 def get_default_output_path() -> str:
@@ -203,6 +204,9 @@ class VideoToMaximo:
         self.recorded_timestamps: List[float] = []
         self._last_result: Optional[PoseResult] = None  # Store last detection result
 
+        # 3-D visualizer (opened on demand with V key)
+        self._viz3d = Pose3DVisualizer()
+
         # Frame counters
         self.total_frames = 0
         self._fps_start_time: float = 0.0
@@ -267,6 +271,13 @@ class VideoToMaximo:
                     landmarks, timestamp_ms
                 )
                 result.pose_world_landmarks = smoothed_landmarks
+
+        # Feed 3-D visualizer if open
+        if result.success and self._viz3d.is_running:
+            self._viz3d.update_landmarks(
+                result.pose_world_landmarks,
+                result.visibility,
+            )
 
         return result.success
 
@@ -345,6 +356,7 @@ class VideoToMaximo:
         print("Controls:")
         print("  R: Start/Stop recording")
         print("  S: Stop recording (keep window open)")
+        print("  V: Toggle 3D skeleton viewer")
         print("  ESC: Quit without saving")
 
         self._fps_start_time = time.time()
@@ -386,6 +398,9 @@ class VideoToMaximo:
                         print(
                             "Recording stopped. Press ESC to quit or R to record again."
                         )
+                elif key == ord("v") or key == ord("V"):
+                    opened = self._viz3d.toggle()
+                    print("3D viewer opened" if opened else "3D viewer closed")
 
         except KeyboardInterrupt:
             print("\nInterrupted by user")
@@ -455,7 +470,7 @@ class VideoToMaximo:
         # Instructions
         cv2.putText(
             frame,
-            "[R]ecord | [S]top | [ESC] quit",
+            "[R]ecord | [S]top | [V]iz 3D | [ESC] quit",
             (10, h - 40),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.5,
@@ -555,6 +570,7 @@ class VideoToMaximo:
             self.capture.stop()
         if self.detector:
             self.detector.close()
+        self._viz3d.close()
         cv2.destroyAllWindows()
 
 
