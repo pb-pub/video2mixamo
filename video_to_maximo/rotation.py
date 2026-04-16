@@ -1,4 +1,4 @@
-# Video to Maximo - Rotation Computation Module
+# Video to Mixamo - Rotation Computation Module
 
 """
 Rotation computation module for converting landmarks to bone rotations.

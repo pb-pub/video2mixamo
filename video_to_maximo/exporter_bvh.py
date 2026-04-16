@@ -1,4 +1,4 @@
-# Video to Maximo - BVH Exporter Module
+# Video to Mixamo - BVH Exporter Module
 
 """
 BVH file exporter module.

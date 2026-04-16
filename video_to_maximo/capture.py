@@ -1,4 +1,4 @@
-# Video to Maximo - Video Capture Module
+# Video to Mixamo - Video Capture Module
 
 """
 Video capture module supporting webcam and video file input.

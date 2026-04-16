@@ -1,10 +1,10 @@
-# Video to Maximo
+# Video to Mixamo
 
 Convert video of a person into a BVH motion capture animation using MediaPipe Pose detection.
 
 ## Overview
 
-This tool captures video from a webcam or file, detects body pose landmarks using MediaPipe, and exports the results as a BVH (Biovision Hierarchical) animation file that can be imported into 3D animation software like Blender, Maximo, or Unity.
+This tool captures video from a webcam or file, detects body pose landmarks using MediaPipe, and exports the results as a BVH (Biovision Hierarchical) animation file that can be imported into 3D animation software like Blender, Mixamo, or Unity.
 
 ## Features
 
@@ -19,7 +19,7 @@ This tool captures video from a webcam or file, detects body pose landmarks usin
 ### From PyPI (when published)
 
 ```bash
-pip install video2maximo
+pip install video2mixamo
 ```
 
 ### From Source
@@ -27,7 +27,7 @@ pip install video2maximo
 1. Clone the repository:
 
 ```bash
-git clone https://github.com/pb-pub/video2maximo.git
+git clone https://github.com/pb-pub/video2mixamo.git
 cd video-to-maximo
 ```
 

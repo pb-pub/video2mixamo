@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Main CLI entry point for Video to Maximo.
+Main CLI entry point for Video to Mixamo.
 
 Usage:
     python main.py                          # Start webcam capture with preview
@@ -109,7 +109,7 @@ def download_model(model_url: str, model_path: str) -> bool:
 def parse_args() -> argparse.Namespace:
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
-        description="Convert video to Maximo-compatible BVH animation",
+        description="Convert video to Mixamo-compatible BVH animation",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__.split("Options:")[0] + "\n\nOptions:",
     )
@@ -165,7 +165,7 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-class VideoToMaximo:
+class VideoToMixamo:
     """Main application class coordinating the pipeline."""
 
     def __init__(self, args: argparse.Namespace):
@@ -478,7 +478,7 @@ class VideoToMaximo:
             1,
         )
 
-        cv2.imshow("Video to Maximo - Press R to record", frame)
+        cv2.imshow("Video to Mixamo - Press R to record", frame)
 
     def _draw_skeleton(self, frame, result) -> None:
         """Draw skeleton on frame using detected landmarks."""
@@ -578,7 +578,7 @@ def main():
     """Main entry point."""
     args = parse_args()
 
-    app = VideoToMaximo(args)
+    app = VideoToMixamo(args)
     app.run()
 
 

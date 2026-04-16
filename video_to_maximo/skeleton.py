@@ -1,4 +1,4 @@
-# Video to Maximo - Skeleton Definition Module
+# Video to Mixamo - Skeleton Definition Module
 
 """
 Skeleton hierarchy definition for Mixamo-compatible BVH animation.

@@ -1,4 +1,4 @@
-# Video to Maximo - Temporal Smoothing Module
+# Video to Mixamo - Temporal Smoothing Module
 
 """
 Temporal smoothing module using One Euro Filter.

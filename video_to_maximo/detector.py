@@ -1,4 +1,4 @@
-# Video to Maximo - Pose Detection Module
+# Video to Mixamo - Pose Detection Module
 
 """
 Pose detection module using MediaPipe PoseLandmarker.

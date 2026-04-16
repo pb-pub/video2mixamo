@@ -1,4 +1,4 @@
-# Core dependencies for Video to Maximo
+# Core dependencies for Video to Mixamo
 mediapipe>=0.10.21
 opencv-python>=4.8
 numpy>=1.24

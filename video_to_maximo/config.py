@@ -1,4 +1,4 @@
-# Video to Maximo - Configuration
+# Video to Mixamo - Configuration
 
 """
 MediaPipe Pose Landmarker models.

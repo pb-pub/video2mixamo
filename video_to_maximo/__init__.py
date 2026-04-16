@@ -1,1 +1,1 @@
-# Video to Maximo - MediaPipe Pose to BVH Animation Converter
+# Video to Mixamo - MediaPipe Pose to BVH Animation Converter
