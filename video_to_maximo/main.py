@@ -63,6 +63,7 @@ from .rotation import RotationComputer
 from .exporter_bvh import BVHExporter
 from .filter import Smoother, FilterConfig
 from .viz3d import Pose3DVisualizer
+from .mixamo_character import MixamoCharacter
 
 
 def get_default_output_path() -> str:
@@ -161,6 +162,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--auto-download", action="store_true", help="Auto-download missing model file"
     )
+    parser.add_argument(
+        "--character",
+        type=str,
+        default=None,
+        metavar="FILE",
+        help="Path to a Mixamo character GLB file for 3D preview animation",
+    )
 
     return parser.parse_args()
 
@@ -205,8 +213,17 @@ class VideoToMixamo:
         self.recorded_visibility: List[Optional[List[float]]] = []
         self._last_result: Optional[PoseResult] = None  # Store last detection result
 
+        # Optional Mixamo character — load before creating the visualizer
+        character_mesh = None
+        if getattr(args, "character", None):
+            try:
+                char = MixamoCharacter(args.character)
+                character_mesh = (char.vertices, char.faces)
+            except Exception as e:
+                print(f"[character] Failed to load {args.character}: {e}")
+
         # 3-D visualizer (opened on demand with V key)
-        self._viz3d = Pose3DVisualizer()
+        self._viz3d = Pose3DVisualizer(character_mesh=character_mesh)
 
         # Frame counters
         self.total_frames = 0

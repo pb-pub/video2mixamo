@@ -43,7 +43,9 @@
       "command": ".venv\\Scripts\\python.exe",
       "args": [
         "-m",
-        "video_to_maximo.main"
+        "video_to_maximo.main",
+        "--character",
+        "bot.glb"
       ],
       "problemMatcher": [],
       "group": "test"

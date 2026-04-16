@@ -10,6 +10,7 @@ bvhio>=1.5
 pyqtgraph>=0.13
 PyOpenGL>=3.1
 PyQt5>=5.15
+pygltflib>=1.16
 
 # For FBX export (requires Python 3.11 for bpy 4.x)
 # bpy>=4.1

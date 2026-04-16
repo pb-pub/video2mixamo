@@ -15,6 +15,12 @@ Usage (from main.py):
     viz.update_landmarks(result.pose_world_landmarks, visibility)
     # to close:
     viz.close()
+
+Optional static character mesh::
+
+    from video_to_maximo.mixamo_character import MixamoCharacter
+    char = MixamoCharacter("character.glb")
+    viz = Pose3DVisualizer(character_mesh=(char.vertices, char.faces))
 """
 
 import threading
@@ -82,10 +88,19 @@ class Pose3DVisualizer:
     ----------
     window_size : tuple[int, int]
         Initial width and height of the window in pixels.
+    character_mesh : tuple[np.ndarray, np.ndarray] | None
+        Optional ``(vertices, faces)`` for a static character mesh.
+        ``vertices`` shape (N, 3) float32, ``faces`` shape (F, 3) int32,
+        both already in display space (from ``MixamoCharacter``).
     """
 
-    def __init__(self, window_size: Tuple[int, int] = (700, 700)):
+    def __init__(
+        self,
+        window_size: Tuple[int, int] = (700, 700),
+        character_mesh: Optional[Tuple[np.ndarray, np.ndarray]] = None,
+    ):
         self._window_size = window_size
+        self._character_mesh = character_mesh  # static, set once at init
         self._queue: queue.Queue = queue.Queue(maxsize=4)
         self._thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
@@ -192,6 +207,19 @@ class Pose3DVisualizer:
             axis.setSize(0.25, 0.25, 0.25)
             w.addItem(axis)
 
+            # ---- optional static character mesh ----
+            if self._character_mesh is not None:
+                char_verts, char_faces = self._character_mesh
+                char_item = gl.GLMeshItem(
+                    vertexes=char_verts,
+                    faces=char_faces,
+                    smooth=True,
+                    drawEdges=False,
+                    color=(0.75, 0.65, 0.55, 0.85),
+                    shader="normalColor",
+                )
+                w.addItem(char_item)
+
             # ---- joints ----
             _colors = _joint_colors(33)
             scatter = gl.GLScatterPlotItem(
@@ -213,9 +241,6 @@ class Pose3DVisualizer:
                 )
                 w.addItem(item)
                 bone_items.append(item)
-
-            # ---- text overlay (basic info) ----
-            # pyqtgraph GLViewWidget doesn't have built-in text; skip for simplicity
 
             _VIS_THRESHOLD = 0.5
 
