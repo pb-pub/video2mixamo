@@ -19,7 +19,7 @@ This tool captures video from a webcam or file, detects body pose landmarks usin
 ### From PyPI (when published)
 
 ```bash
-pip install video-to-maximo
+pip install video2maximo
 ```
 
 ### From Source
@@ -27,7 +27,7 @@ pip install video-to-maximo
 1. Clone the repository:
 
 ```bash
-git clone https://github.com/yourusername/video-to-maximo.git
+git clone https://github.com/pb-pub/video2maximo.git
 cd video-to-maximo
 ```
 
@@ -59,22 +59,22 @@ Options: `full` (default), `lite`, `heavy`, or `all`
 
 ```bash
 # Start webcam capture with preview
-python -m src.main
+python -m video_to_maximo.main
 
 # Use specific camera
-python -m src.main --camera 1
+python -m video_to_maximo.main --camera 1
 
 # Process video file
-python -m src.main --input video.mp4
+python -m video_to_maximo.main --input video.mp4
 
 # Process video and export to specific file
-python -m src.main --input video.mp4 --output animation.bvh
+python -m video_to_maximo.main --input video.mp4 --output animation.bvh
 
 # Use custom model
-python -m src.main --model models/pose_landmarker_full.task
+python -m video_to_maximo.main --model models/pose_landmarker_full.task
 
 # Disable smoothing
-python -m src.main --no-smooth
+python -m video_to_maximo.main --no-smooth
 ```
 
 ### Controls (in preview window)
@@ -86,11 +86,11 @@ python -m src.main --no-smooth
 ### Python API
 
 ```python
-from src.capture import VideoCapture
-from src.detector import PoseLandmarker
-from src.filter import Smoother, FilterConfig
-from src.rotation import RotationComputer
-from src.exporter_bvh import BVHExporter
+from video_to_maximo.capture import VideoCapture
+from video_to_maximo.detector import PoseLandmarker
+from video_to_maximo.filter import Smoother, FilterConfig
+from video_to_maximo.rotation import RotationComputer
+from video_to_maximo.exporter_bvh import BVHExporter
 
 # Capture video from webcam
 with VideoCapture(camera_id=0) as capture:
@@ -118,7 +118,7 @@ with VideoCapture(camera_id=0) as capture:
 
 ```
 video-to-maximo/
-├── src/                     # Main package
+├── video_to_maximo/         # Main package
 │   ├── __init__.py
 │   ├── capture.py          # Video capture (webcam/file)
 │   ├── config.py           # Configuration and constants

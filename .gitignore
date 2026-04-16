@@ -40,6 +40,8 @@ env/
 .qwen/
 .claude/
 .agent/
+QWEN.md
+CLAUDE.md
 
 # Environment variables
 .env
