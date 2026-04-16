@@ -21,44 +21,45 @@ from pathlib import Path
 
 class CaptureError(Exception):
     """Custom exception for video capture errors."""
+
     pass
 
 
 class VideoCapture:
     """
     Unified video capture interface for webcam and video files.
-    
+
     Yields frames as (frame, timestamp_ms) tuples where:
         - frame: numpy array (H, W, 3) in BGR format
         - timestamp_ms: timestamp in milliseconds since start
-    
+
     For webcam:
         - timestamp_ms is relative to capture start
         - camera_id selects which camera (default 0)
-    
+
     For video files:
         - timestamp_ms comes from video metadata
         - fps is derived from the video
-    
+
     Usage:
         # Webcam
         for frame, ts in VideoCapture(camera_id=0):
             process(frame)
-        
+
         # Video file
         for frame, ts in VideoCapture("input.mp4"):
             process(frame)
     """
-    
+
     def __init__(
         self,
         input_source: Optional[str] = None,
         camera_id: int = 0,
-        fps: Optional[float] = None
+        fps: Optional[float] = None,
     ):
         """
         Initialize video capture.
-        
+
         Args:
             input_source: Path to video file, or None for webcam
             camera_id: Camera device ID (used only if input_source is None)
@@ -71,22 +72,22 @@ class VideoCapture:
         self._is_opened = False
         self._start_time_ms: Optional[float] = None
         self._frame_count = 0
-        
+
         if input_source is not None:
             self._init_file_capture(input_source)
         else:
             self._init_camera_capture(camera_id)
-    
+
     def _init_file_capture(self, filepath: str) -> None:
         """Initialize video file capture."""
         path = Path(filepath)
         if not path.exists():
             raise CaptureError(f"Video file not found: {filepath}")
-        
+
         self._cap = cv2.VideoCapture(str(path))
         if not self._cap.isOpened():
             raise CaptureError(f"Could not open video file: {filepath}")
-        
+
         # Auto-detect FPS if not provided
         if self.fps is None:
             detected_fps = self._cap.get(cv2.CAP_PROP_FPS)
@@ -94,17 +95,17 @@ class VideoCapture:
                 self.fps = detected_fps
             else:
                 self.fps = 30.0  # Default fallback
-    
+
     def _init_camera_capture(self, camera_id: int) -> None:
         """Initialize webcam capture."""
         self._cap = cv2.VideoCapture(camera_id, cv2.CAP_DSHOW)
         if not self._cap.isOpened():
             raise CaptureError(f"Could not open camera {camera_id}")
-        
+
         # Try to set FPS if specified
         if self.fps is not None:
             self._cap.set(cv2.CAP_PROP_FPS, self.fps)
-        
+
         # Auto-detect FPS
         if self.fps is None:
             detected_fps = self._cap.get(cv2.CAP_PROP_FPS)
@@ -112,11 +113,11 @@ class VideoCapture:
                 self.fps = detected_fps
             else:
                 self.fps = 30.0
-    
+
     def __iter__(self) -> Iterator[Tuple]:
         """Return iterator for frame capture."""
         return self
-    
+
     def __next__(self) -> Tuple:
         """Get next frame from capture."""
         if not self._is_opened:
@@ -156,37 +157,37 @@ class VideoCapture:
                 return pos_ms
         # For webcam or fallback, use elapsed time from start
         return time.time() * 1000 - self._start_time_ms
-    
+
     def stop(self) -> None:
         """Stop capture and release resources."""
         if self._cap is not None:
             self._cap.release()
             self._cap = None
         self._is_opened = False
-    
+
     def __enter__(self):
         """Context manager entry."""
         return self
-    
+
     def __exit__(self, exc_type, exc_val, exc_tb):
         """Context manager exit - ensures cleanup."""
         self.stop()
         return False
-    
+
     @property
     def width(self) -> int:
         """Get frame width."""
         if self._cap is None:
             return 0
         return int(self._cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    
+
     @property
     def height(self) -> int:
         """Get frame height."""
         if self._cap is None:
             return 0
         return int(self._cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    
+
     @property
     def frame_count(self) -> int:
         """Get total frames processed."""
@@ -196,11 +197,11 @@ class VideoCapture:
 def test_webcam(camera_id: int = 0, num_frames: int = 5) -> bool:
     """
     Test webcam capture for a few frames.
-    
+
     Args:
         camera_id: Camera device ID
         num_frames: Number of frames to capture for testing
-    
+
     Returns:
         True if capture successful, False otherwise
     """
@@ -221,11 +222,11 @@ def test_webcam(camera_id: int = 0, num_frames: int = 5) -> bool:
 def test_video_file(filepath: str, num_frames: int = 5) -> bool:
     """
     Test video file capture for a few frames.
-    
+
     Args:
         filepath: Path to video file
         num_frames: Number of frames to capture for testing
-    
+
     Returns:
         True if capture successful, False otherwise
     """
@@ -245,7 +246,7 @@ def test_video_file(filepath: str, num_frames: int = 5) -> bool:
 
 if __name__ == "__main__":
     import sys
-    
+
     if len(sys.argv) > 1:
         # Test video file
         filepath = sys.argv[1]

@@ -3,7 +3,8 @@
 Download MediaPipe Pose Landmarker models.
 
 Usage:
-    python scripts/download_models.py [model_name]
+    python -m scripts.download_models [model_name]
+    python scripts/download_models.py [model_name]  # legacy
 
 Models:
     full   - pose_landmarker_full.task  (default, ~13 MB)
@@ -11,37 +12,34 @@ Models:
     heavy  - pose_landmarker_heavy.task (~30 MB)
 
 Examples:
-    python scripts/download_models.py          # Download full model
-    python scripts/download_models.py lite     # Download lite model
-    python scripts/download_models.py all      # Download all models
+    python -m scripts.download_models          # Download full model
+    python -m scripts.download_models lite     # Download lite model
+    python -m scripts.download_models all      # Download all models
 """
 
-import os
-import sys
 import urllib.request
 import urllib.error
+import sys
 from pathlib import Path
 
-# Add src to path for config import
-SCRIPT_DIR = Path(__file__).parent.parent / "src"
-sys.path.insert(0, str(SCRIPT_DIR))
-
-from config import (
-    MODEL_DIR,
-    POSE_LANDMARKER_FULL_URL,
-    POSE_LANDMARKER_LITE_URL,
-    POSE_LANDMARKER_HEAVY_URL,
-)
+# Support both running as module and directly
+try:
+    from . import config
+except (ImportError, ValueError):
+    # Fallback for direct script execution (from scripts/ directory)
+    SCRIPT_DIR = Path(__file__).parent.parent / "video_to_maximo"
+    sys.path.insert(0, str(SCRIPT_DIR))
+    import config as config
 
 # Map model names to URLs
 MODEL_URLS = {
-    "full": ("pose_landmarker_full.task", POSE_LANDMARKER_FULL_URL),
-    "lite": ("pose_landmarker_lite.task", POSE_LANDMARKER_LITE_URL),
-    "heavy": ("pose_landmarker_heavy.task", POSE_LANDMARKER_HEAVY_URL),
+    "full": ("pose_landmarker_full.task", config.POSE_LANDMARKER_FULL_URL),
+    "lite": ("pose_landmarker_lite.task", config.POSE_LANDMARKER_LITE_URL),
+    "heavy": ("pose_landmarker_heavy.task", config.POSE_LANDMARKER_HEAVY_URL),
 }
 
 # Directory where models are stored
-MODELS_PATH = Path(__file__).parent.parent / MODEL_DIR
+MODELS_PATH = Path(__file__).parent.parent / config.MODEL_DIR
 
 
 def download_file(url: str, filepath: Path) -> bool:
