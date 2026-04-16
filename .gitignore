@@ -20,6 +20,7 @@ wheels/
 .installed.cfg
 *.egg
 MANIFEST
+.ruff_cache/
 
 # Virtual environments
 .venv/
@@ -39,6 +40,8 @@ env/
 .qwen/
 .claude/
 .agent/
+QWEN.md
+CLAUDE.md
 
 # Environment variables
 .env

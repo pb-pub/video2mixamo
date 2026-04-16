@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "video2maximo"
+version = "0.1.0"
+description = "Convert video of a person into a BVH motion capture animation using MediaPipe Pose detection"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [
+    {name = "Paul Boutet", email = "[EMAIL_ADDRESS]"}
+]
+
+dependencies = [
+    "opencv-python>=4.5.0",
+    "mediapipe>=0.10.0",
+    "numpy>=1.21.0",
+    "scipy>=1.7.0",
+]
+
+[project.scripts]
+download-models = "scripts.download_models:main"
+
+[project.urls]
+Homepage = "https://github.com/pb-pub/video2maximo"
+Documentation = "https://github.com/pb-pub/video2maximo#readme"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["video_to_maximo*", "scripts*"]

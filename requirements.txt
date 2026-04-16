@@ -6,6 +6,11 @@ scipy>=1.11
 bvhio>=1.5
 
 # Optional dependencies
+# 3D skeleton visualizer (press V in preview window)
+pyqtgraph>=0.13
+PyOpenGL>=3.1
+PyQt5>=5.15
+
 # For FBX export (requires Python 3.11 for bpy 4.x)
 # bpy>=4.1
 

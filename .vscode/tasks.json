@@ -1,0 +1,186 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Download Models",
+      "type": "shell",
+      "command": ".venv\\Scripts\\python.exe",
+      "args": [
+        "-m",
+        "scripts.download_models"
+      ],
+      "problemMatcher": [],
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      }
+    },
+    {
+      "label": "Download Models - Lite",
+      "type": "shell",
+      "command": ".venv\\Scripts\\python.exe",
+      "args": [
+        "-m",
+        "scripts.download_models",
+        "lite"
+      ],
+      "problemMatcher": []
+    },
+    {
+      "label": "Download Models - Heavy",
+      "type": "shell",
+      "command": ".venv\\Scripts\\python.exe",
+      "args": [
+        "-m",
+        "scripts.download_models",
+        "heavy"
+      ],
+      "problemMatcher": []
+    },
+    {
+      "label": "Run with Webcam",
+      "type": "shell",
+      "command": ".venv\\Scripts\\python.exe",
+      "args": [
+        "-m",
+        "video_to_maximo.main"
+      ],
+      "problemMatcher": [],
+      "group": "test"
+    },
+    {
+      "label": "Run with Webcam - No Preview",
+      "type": "shell",
+      "command": ".venv\\Scripts\\python.exe",
+      "args": [
+        "-m",
+        "video_to_maximo.main",
+        "--no-preview"
+      ],
+      "problemMatcher": [],
+      "group": "test"
+    },
+    {
+      "label": "Run with Video File",
+      "type": "shell",
+      "command": ".venv\\Scripts\\python.exe",
+      "args": [
+        "-m",
+        "video_to_maximo.main",
+        "--input",
+        "",
+        "--output",
+        "animation_output.bvh"
+      ],
+      "problemMatcher": [],
+      "group": "test"
+    },
+    {
+      "label": "Process Video with Smoothing",
+      "type": "shell",
+      "command": ".venv\\Scripts\\python.exe",
+      "args": [
+        "-m",
+        "video_to_maximo.main",
+        "--input",
+        "",
+        "--output",
+        "animation_smooth.bvh"
+      ],
+      "problemMatcher": [],
+      "group": "test"
+    },
+    {
+      "label": "Process Video - No Smoothing",
+      "type": "shell",
+      "command": ".venv\\Scripts\\python.exe",
+      "args": [
+        "-m",
+        "video_to_maximo.main",
+        "--input",
+        "",
+        "--output",
+        "animation_raw.bvh",
+        "--no-smooth"
+      ],
+      "problemMatcher": [],
+      "group": "test"
+    },
+    {
+      "label": "Test Filter Module",
+      "type": "shell",
+      "command": ".venv\\Scripts\\python.exe",
+      "args": [
+        "-m",
+        "video_to_maximo.filter"
+      ],
+      "problemMatcher": []
+    },
+    {
+      "label": "Test Rotation Module",
+      "type": "shell",
+      "command": ".venv\\Scripts\\python.exe",
+      "args": [
+        "-m",
+        "video_to_maximo.rotation"
+      ],
+      "problemMatcher": []
+    },
+    {
+      "label": "Test BVH Exporter",
+      "type": "shell",
+      "command": ".venv\\Scripts\\python.exe",
+      "args": [
+        "-m",
+        "video_to_maximo.exporter_bvh"
+      ],
+      "problemMatcher": []
+    },
+    {
+      "label": "Preview BVH Animation",
+      "type": "shell",
+      "command": ".venv\\Scripts\\python.exe",
+      "args": [
+        "-m",
+        "video_to_maximo.bvh_previewer",
+        "--list"
+      ],
+      "problemMatcher": []
+    },
+    {
+      "label": "Preview BVH Animation - Recent",
+      "type": "shell",
+      "command": ".venv\\Scripts\\python.exe",
+      "args": [
+        "-m",
+        "video_to_maximo.bvh_previewer"
+      ],
+      "problemMatcher": []
+    },
+    {
+      "label": "Install Dependencies",
+      "type": "shell",
+      "command": ".venv\\Scripts\\python.exe",
+      "args": [
+        "-m",
+        "pip",
+        "install",
+        "-e",
+        "."
+      ],
+      "problemMatcher": [],
+      "group": "build"
+    },
+    {
+      "label": "Help",
+      "type": "shell",
+      "command": ".venv\\Scripts\\python.exe",
+      "args": [
+        "-m",
+        "video_to_maximo.main",
+        "--help"
+      ],
+      "problemMatcher": []
+    }
+  ]
+}
