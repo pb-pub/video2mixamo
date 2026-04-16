@@ -6,7 +6,8 @@
       "type": "shell",
       "command": ".venv\\Scripts\\python.exe",
       "args": [
-        "scripts/download_models.py"
+        "-m",
+        "scripts.download_models"
       ],
       "problemMatcher": [],
       "group": {
@@ -19,7 +20,8 @@
       "type": "shell",
       "command": ".venv\\Scripts\\python.exe",
       "args": [
-        "scripts/download_models.py",
+        "-m",
+        "scripts.download_models",
         "lite"
       ],
       "problemMatcher": []
@@ -29,7 +31,8 @@
       "type": "shell",
       "command": ".venv\\Scripts\\python.exe",
       "args": [
-        "scripts/download_models.py",
+        "-m",
+        "scripts.download_models",
         "heavy"
       ],
       "problemMatcher": []
@@ -39,7 +42,8 @@
       "type": "shell",
       "command": ".venv\\Scripts\\python.exe",
       "args": [
-        "src/main.py"
+        "-m",
+        "video_to_maximo.main"
       ],
       "problemMatcher": [],
       "group": "test"
@@ -49,7 +53,8 @@
       "type": "shell",
       "command": ".venv\\Scripts\\python.exe",
       "args": [
-        "src/main.py",
+        "-m",
+        "video_to_maximo.main",
         "--no-preview"
       ],
       "problemMatcher": [],
@@ -60,7 +65,8 @@
       "type": "shell",
       "command": ".venv\\Scripts\\python.exe",
       "args": [
-        "src/main.py",
+        "-m",
+        "video_to_maximo.main",
         "--input",
         "",
         "--output",
@@ -74,7 +80,8 @@
       "type": "shell",
       "command": ".venv\\Scripts\\python.exe",
       "args": [
-        "src/main.py",
+        "-m",
+        "video_to_maximo.main",
         "--input",
         "",
         "--output",
@@ -88,7 +95,8 @@
       "type": "shell",
       "command": ".venv\\Scripts\\python.exe",
       "args": [
-        "src/main.py",
+        "-m",
+        "video_to_maximo.main",
         "--input",
         "",
         "--output",
@@ -103,7 +111,8 @@
       "type": "shell",
       "command": ".venv\\Scripts\\python.exe",
       "args": [
-        "src/filter.py"
+        "-m",
+        "video_to_maximo.filter"
       ],
       "problemMatcher": []
     },
@@ -112,7 +121,8 @@
       "type": "shell",
       "command": ".venv\\Scripts\\python.exe",
       "args": [
-        "src/rotation.py"
+        "-m",
+        "video_to_maximo.rotation"
       ],
       "problemMatcher": []
     },
@@ -121,7 +131,8 @@
       "type": "shell",
       "command": ".venv\\Scripts\\python.exe",
       "args": [
-        "src/exporter_bvh.py"
+        "-m",
+        "video_to_maximo.exporter_bvh"
       ],
       "problemMatcher": []
     },
@@ -130,7 +141,8 @@
       "type": "shell",
       "command": ".venv\\Scripts\\python.exe",
       "args": [
-        "src/bvh_previewer.py",
+        "-m",
+        "video_to_maximo.bvh_previewer",
         "--list"
       ],
       "problemMatcher": []
@@ -140,7 +152,8 @@
       "type": "shell",
       "command": ".venv\\Scripts\\python.exe",
       "args": [
-        "src/bvh_previewer.py"
+        "-m",
+        "video_to_maximo.bvh_previewer"
       ],
       "problemMatcher": []
     },
@@ -152,8 +165,8 @@
         "-m",
         "pip",
         "install",
-        "-r",
-        "requirements.txt"
+        "-e",
+        "."
       ],
       "problemMatcher": [],
       "group": "build"
@@ -163,7 +176,8 @@
       "type": "shell",
       "command": ".venv\\Scripts\\python.exe",
       "args": [
-        "src/main.py",
+        "-m",
+        "video_to_maximo.main",
         "--help"
       ],
       "problemMatcher": []
