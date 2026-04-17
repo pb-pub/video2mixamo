@@ -24,6 +24,7 @@ Conversions::
 
 from __future__ import annotations
 
+import math
 import time
 from pathlib import Path
 from typing import List, Dict, Tuple
@@ -343,7 +344,11 @@ class MixamoCharacter:
 
             if skin.inverseBindMatrices is not None:
                 ibm = _read_accessor(gltf, blob, skin.inverseBindMatrices)  # (J,16)
-                self._inv_bind_matrices = ibm.reshape(-1, 4, 4).astype(np.float32)
+                # glTF stores matrices column-major; numpy reshape is row-major,
+                # so the result is the transpose of the actual matrix — fix it.
+                self._inv_bind_matrices = (
+                    ibm.reshape(-1, 4, 4).transpose(0, 2, 1).astype(np.float32)
+                )
             else:
                 n_j = len(self._joint_nodes)
                 self._inv_bind_matrices = np.tile(
@@ -481,26 +486,158 @@ class MixamoCharacter:
         return result
 
     # ------------------------------------------------------------------
+    # Step 3 — Apply pose rotations → deformed mesh
+    # ------------------------------------------------------------------
+
+    def apply_pose_rotations(
+        self, pose_rotations: Dict[str, Quaternion]
+    ) -> np.ndarray:
+        """Deform the mesh via Linear Blend Skinning from per-joint local rotations.
+
+        Parameters
+        ----------
+        pose_rotations : dict[str, Quaternion]
+            Per-joint local rotations keyed by bone name **without** the
+            ``"mixamorig:"`` prefix (as returned by ``compute_pose_rotations``).
+            Any bone absent from the dict falls back to its rest-pose local
+            rotation so that unmapped joints remain in T-pose.
+
+        Returns
+        -------
+        np.ndarray
+            Deformed mesh vertices **(N, 3) float32** in display space (Z-up),
+            ready to pass to ``Pose3DVisualizer.update_mesh``.
+        """
+        if not self.can_animate:
+            return self.vertices.copy()
+
+        n_nodes = len(self.joint_tree._nodes)
+        world_mats = [np.eye(4, dtype=np.float32) for _ in range(n_nodes)]
+
+        def _build_local(node, q: Quaternion) -> np.ndarray:
+            """Build a 4×4 TRS local matrix for *node* with rotation *q*."""
+            t = node.translation or [0.0, 0.0, 0.0]
+            s = getattr(node, "scale", None) or [1.0, 1.0, 1.0]
+            m = q.to_matrix()          # 4×4 rotation
+            m[:3, 0] *= s[0]           # apply scale to rotation columns
+            m[:3, 1] *= s[1]
+            m[:3, 2] *= s[2]
+            m[0, 3] = float(t[0])      # set translation
+            m[1, 3] = float(t[1])
+            m[2, 3] = float(t[2])
+            return m
+
+        # Pre-pass: accumulate world transforms for all ancestors of the
+        # skeleton root (e.g. the Armature node whose scale is 0.01).
+        ancestors: List[int] = []
+        p = self.joint_tree.parent(self.joint_tree.root_idx)
+        while p is not None:
+            ancestors.append(p)
+            p = self.joint_tree.parent(p)
+
+        for anc_idx in reversed(ancestors):  # outermost first
+            node = self.joint_tree.node(anc_idx)
+            q_anc = self.joint_tree.rest_rotations[anc_idx]
+            par = self.joint_tree.parent(anc_idx)
+            parent_mat = world_mats[par] if par is not None else np.eye(4, dtype=np.float32)
+            world_mats[anc_idx] = parent_mat @ _build_local(node, q_anc)
+
+        # FK walk: compute world transforms for the skeleton subtree.
+        for idx, _ in self.joint_tree.walk():
+            node = self.joint_tree.node(idx)
+            bone_key = self.joint_tree.name(idx).replace("mixamorig:", "")
+            q_local = pose_rotations.get(bone_key, self.joint_tree.rest_rotations[idx])
+            p = self.joint_tree.parent(idx)
+            parent_mat = world_mats[p] if p is not None else np.eye(4, dtype=np.float32)
+            world_mats[idx] = parent_mat @ _build_local(node, q_local)
+
+        # Skin matrices: M_skin[j] = M_world_pose[joint] @ M_inv_bind[j]
+        n_joints = len(self._joint_nodes)
+        skin_mats = np.empty((n_joints, 4, 4), dtype=np.float32)
+        for j, node_idx in enumerate(self._joint_nodes):
+            skin_mats[j] = world_mats[node_idx] @ self._inv_bind_matrices[j]
+
+        # LBS: blend bind-pose vertices across up to 4 influences.
+        n_verts = len(self._glb_verts)
+        verts_h = np.ones((n_verts, 4), dtype=np.float32)
+        verts_h[:, :3] = self._glb_verts  # GLB Y-up bind-pose positions
+
+        out = np.zeros((n_verts, 3), dtype=np.float32)
+        for k in range(4):
+            j_idx = self._skin_joints[:, k].astype(np.int32)  # (N,)
+            w = self._skin_weights[:, k, np.newaxis]  # (N,1)
+            M = skin_mats[j_idx]  # (N,4,4)
+            transformed = np.einsum("nij,nj->ni", M, verts_h)[:, :3]
+            out += w * transformed
+
+        # GLB Y-up → display Z-up: disp = [-X, -Z, +Y]
+        return np.column_stack(
+            [-out[:, 0], -out[:, 2], out[:, 1]]
+        ).astype(np.float32)
+
+    # ------------------------------------------------------------------
     # Preview
     # ------------------------------------------------------------------
 
     def preview(self) -> None:
-        """Open an interactive 3D window showing the character in rest/T-pose.
+        """Open an interactive 3D window showing the character in a hardcoded test pose.
+
+        If LBS data is available the mesh is deformed with a fixed pose that
+        bends the spine forward and lowers both arms to an A-pose, making it
+        easy to verify that ``apply_pose_rotations`` produces a visible result.
+        Falls back to the T-pose mesh when LBS data is absent.
 
         Blocks until the window is closed or Ctrl-C is pressed.
         """
         from video_to_maximo.viz3d import Pose3DVisualizer
 
+        def _q(deg: float, ax: str) -> Quaternion:
+            """Local rotation of *deg* degrees around axis 'x', 'y', or 'z'."""
+            half = math.radians(deg) / 2.0
+            s = math.sin(half)
+            c = math.cos(half)
+            return {
+                "x": Quaternion(s, 0.0, 0.0, c),
+                "y": Quaternion(0.0, s, 0.0, c),
+                "z": Quaternion(0.0, 0.0, s, c),
+            }[ax]
+
+        # Small deltas applied ON TOP of each bone's rest local rotation so
+        # the result is a predictable "nudge from T-pose" regardless of the
+        # specific rest-pose quaternions stored in the GLB.
+        _DELTAS: Dict[str, Quaternion] = {
+            "Spine":    _q(15, "x"),
+            "Spine1":   _q(15, "x"),
+            "Spine2":   _q(10, "x"),
+            "LeftArm":  _q(-45, "z"),   # lower left arm toward body
+            "RightArm": _q( 45, "z"),   # lower right arm toward body
+        }
+
+        _TEST_POSE: Dict[str, Quaternion] = {}
+        if self.can_animate:
+            for bone_name, q_delta in _DELTAS.items():
+                node_idx = self.joint_tree.find(f"mixamorig:{bone_name}")
+                if node_idx is not None:
+                    rest = self.joint_tree.rest_rotations[node_idx]
+                    _TEST_POSE[bone_name] = rest * q_delta
+
+        if self.can_animate:
+            display_verts = self.apply_pose_rotations(_TEST_POSE)
+            label = "test-pose (LBS)"
+        else:
+            display_verts = self.vertices
+            label = "rest T-pose (no LBS data)"
+
         print(
-            f"[MixamoCharacter] Rest-pose preview\n"
+            f"[MixamoCharacter] Preview — {label}\n"
             f"  File     : {self.glb_path}\n"
             f"  Vertices : {len(self.vertices):,}\n"
             f"  Faces    : {len(self.faces):,}\n"
-            f"  LBS data : {'available' if self.can_animate else 'not found'}\n"
+            f"  Pose     : spine +40° forward, arms -/+45° Z\n"
             f"  Close the window or press Ctrl-C to exit."
         )
 
-        viz = Pose3DVisualizer(character_mesh=(self.vertices, self.faces))
+        viz = Pose3DVisualizer(character_mesh=(display_verts, self.faces))
         viz.open()
 
         try:

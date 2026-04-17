@@ -8,8 +8,6 @@ nodes that expose the same interface pygltflib Node objects do.
 import math
 import types
 
-import pytest
-
 from video_to_maximo.mixamo_character import JointTree, MixamoCharacter, _BONE_LM
 from video_to_maximo.quaternion import Quaternion
 from video_to_maximo.vector import Vector3
@@ -394,7 +392,6 @@ class TestNonIdentityRestRotations:
         # When the child translation is not unit-length, it must be normalized
         # before being used as the local bone direction.
         # Use translation (0, 5, 0): normalize → (0,1,0), same as (0,1,0).
-        s = math.sqrt(2) / 2
         nodes = [
             _node("mixamorig:Hips", children=[1]),
             _node("mixamorig:Spine", children=[2], translation=[0.0, 1.0, 0.0]),
@@ -496,3 +493,120 @@ class TestBranchingTree:
         r_rotspine = char.compute_pose_rotations(lms_rotspine)
         if "LeftUpLeg" in r_base and "LeftUpLeg" in r_rotspine:
             assert _q_close(r_base["LeftUpLeg"], r_rotspine["LeftUpLeg"])
+
+
+# ===========================================================================
+# apply_pose_rotations — LBS mesh deformation
+# ===========================================================================
+
+
+def _make_single_bone_char():
+    """
+    Two-node skeleton: Root(0) → Bone(1, translation=(0,1,0)).
+    One bind-pose vertex at GLB (0,2,0), 100% weighted to Bone (joint 0 → node 1).
+
+    Inverse bind matrix for Bone = inverse of T(0,1,0) = T(0,-1,0).
+    """
+    import numpy as np
+
+    nodes = [
+        _node("Root", children=[1], translation=[0.0, 0.0, 0.0]),
+        _node("Bone", children=[], translation=[0.0, 1.0, 0.0]),
+    ]
+    char = object.__new__(MixamoCharacter)
+    char.can_animate = True
+    char.joint_tree = JointTree(nodes, root_idx=0)
+    char._joint_nodes = [1]  # skin joint index 0  →  node index 1
+    char._glb_verts = np.array([[0.0, 2.0, 0.0]], dtype=np.float32)
+    char._skin_joints = np.array([[0, 0, 0, 0]], dtype=np.uint16)
+    char._skin_weights = np.array([[1.0, 0.0, 0.0, 0.0]], dtype=np.float32)
+    # inv_bind = inverse of the 4×4 world transform of Bone in bind pose = T(0,-1,0)
+    char._inv_bind_matrices = np.array(
+        [[[1, 0, 0, 0], [0, 1, 0, -1], [0, 0, 1, 0], [0, 0, 0, 1]]],
+        dtype=np.float32,
+    )
+    char.vertices = np.zeros((1, 3), dtype=np.float32)
+    char.faces = np.zeros((0, 3), dtype=np.int32)
+    return char
+
+
+class TestApplyPoseRotations:
+    def test_not_animatable_returns_rest_vertices(self):
+        import numpy as np
+
+        char = object.__new__(MixamoCharacter)
+        char.can_animate = False
+        char.vertices = np.array([[1.0, 2.0, 3.0]], dtype=np.float32)
+        result = char.apply_pose_rotations({})
+        np.testing.assert_array_equal(result, char.vertices)
+
+    def test_rest_pose_empty_dict_returns_bind_verts_in_display_space(self):
+        import numpy as np
+
+        char = _make_single_bone_char()
+        result = char.apply_pose_rotations({})
+        # GLB (0,2,0) → display (disp_x=-X, disp_y=-Z, disp_z=+Y) = (0,0,2)
+        assert result.shape == (1, 3)
+        np.testing.assert_allclose(result[0], [0.0, 0.0, 2.0], atol=1e-4)
+
+    def test_90deg_z_rotation_moves_vertex_correctly(self):
+        """
+        90°Z rotation at Bone (world pos (0,1,0)):
+          bind vertex (0,2,0) is 1 unit along the bone (+Y from joint).
+          After 90°Z rotation the bone points in the -X direction,
+          so the vertex lands at GLB (-1,1,0) → display (1,0,1).
+        """
+        import numpy as np
+
+        char = _make_single_bone_char()
+        s = math.sqrt(2) / 2
+        q_90z = Quaternion(0.0, 0.0, s, s)
+        result = char.apply_pose_rotations({"Bone": q_90z})
+        assert result.shape == (1, 3)
+        np.testing.assert_allclose(result[0], [1.0, 0.0, 1.0], atol=1e-4)
+
+    def test_output_dtype_is_float32(self):
+        import numpy as np
+
+        char = _make_single_bone_char()
+        result = char.apply_pose_rotations({})
+        assert result.dtype == np.float32
+
+    def test_lbs_blend_two_joints(self):
+        """
+        Two joints with equal 50/50 weight on one vertex.
+        Joint 0 (node 1) stays at rest; joint 1 (node 2) rotates 90°Z.
+        Expected: average of the two deformed positions.
+        """
+        import numpy as np
+
+        nodes = [
+            _node("Root", children=[1, 2], translation=[0.0, 0.0, 0.0]),
+            _node("BoneA", children=[], translation=[0.0, 1.0, 0.0]),
+            _node("BoneB", children=[], translation=[0.0, 1.0, 0.0]),
+        ]
+        inv_bind_A = np.array(
+            [[1, 0, 0, 0], [0, 1, 0, -1], [0, 0, 1, 0], [0, 0, 0, 1]], dtype=np.float32
+        )
+        # BoneB has the same bind transform as BoneA
+        inv_bind_B = inv_bind_A.copy()
+
+        char = object.__new__(MixamoCharacter)
+        char.can_animate = True
+        char.joint_tree = JointTree(nodes, root_idx=0)
+        char._joint_nodes = [1, 2]  # joint 0→node 1, joint 1→node 2
+        char._glb_verts = np.array([[0.0, 2.0, 0.0]], dtype=np.float32)
+        char._skin_joints = np.array([[0, 1, 0, 0]], dtype=np.uint16)
+        char._skin_weights = np.array([[0.5, 0.5, 0.0, 0.0]], dtype=np.float32)
+        char._inv_bind_matrices = np.stack([inv_bind_A, inv_bind_B])
+        char.vertices = np.zeros((1, 3), dtype=np.float32)
+        char.faces = np.zeros((0, 3), dtype=np.int32)
+
+        s = math.sqrt(2) / 2
+        q_90z = Quaternion(0.0, 0.0, s, s)
+        # BoneA at rest → vertex stays at GLB (0,2,0)
+        # BoneB rotated 90°Z → vertex moves to GLB (-1,1,0)
+        # Blend 50/50: GLB (-0.5, 1.5, 0) → display (0.5, 0, 1.5)
+        result = char.apply_pose_rotations({"BoneB": q_90z})
+        assert result.shape == (1, 3)
+        np.testing.assert_allclose(result[0], [0.5, 0.0, 1.5], atol=1e-4)
