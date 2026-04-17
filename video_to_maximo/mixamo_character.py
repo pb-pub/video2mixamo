@@ -27,7 +27,7 @@ from __future__ import annotations
 import math
 import time
 from pathlib import Path
-from typing import List, Dict, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -379,7 +379,10 @@ class MixamoCharacter:
     # ------------------------------------------------------------------
 
     def compute_pose_rotations(
-        self, landmarks: List[Vector3]
+        self,
+        landmarks: List[Vector3],
+        visibility: Optional[List[float]] = None,
+        vis_threshold: float = 0.5,
     ) -> Dict[str, Quaternion]:
         """Compute per-joint local rotations from MediaPipe world landmarks.
 
@@ -400,22 +403,31 @@ class MixamoCharacter:
         * Convert back to a local rotation relative to the parent's accumulated
           *pose* world rotation.
 
-        Bones with ``lm_a == lm_b`` (no directional target) and Hips (whose
-        ``_BONE_LM`` entry encodes position, not direction) are skipped; their
-        rest local rotation is inherited unchanged via FK propagation.
+        Bones with ``lm_a == lm_b`` (no directional target), Hips (whose
+        ``_BONE_LM`` entry encodes position, not direction), and bones whose
+        driving landmarks are below *vis_threshold* are skipped; their rest
+        local rotation is inherited unchanged via FK propagation.
 
         Parameters
         ----------
         landmarks : list of Vector3
             MediaPipe world landmarks (Y-down, X-right, Z-toward-camera).
             Must contain at least 33 entries (indices 0-32 used by _BONE_LM).
+        visibility : list of float, optional
+            Per-landmark visibility scores [0, 1] for at least the 33 base
+            landmarks.  When provided, bones whose driving landmarks are below
+            *vis_threshold* fall back to their rest-pose rotation.
+        vis_threshold : float
+            Minimum visibility required for both driving landmarks before a
+            bone rotation is computed (default 0.5).
 
         Returns
         -------
         dict[str, Quaternion]
             Maps Mixamo bone name (no ``"mixamorig:"`` prefix) to the new
-            local rotation quaternion.  Bones without a directional target are
-            omitted; callers should fall back to the rest local rotation.
+            local rotation quaternion.  Bones without a directional target or
+            with insufficient visibility are omitted; callers should fall back
+            to the rest local rotation.
         """
         if not self.can_animate:
             return {}
@@ -448,14 +460,27 @@ class MixamoCharacter:
             if bone_key == "Hips" or lm_a == lm_b:
                 continue
 
+            # Skip if either driving landmark has insufficient visibility.
+            if visibility is not None:
+                vis_a = visibility[lm_a] if lm_a < len(visibility) else 0.0
+                vis_b = visibility[lm_b] if lm_b < len(visibility) else 0.0
+                if vis_a < vis_threshold or vis_b < vis_threshold:
+                    continue
+
             pos_a = landmarks[lm_a]
             pos_b = landmarks[lm_b]
 
-            # MediaPipe Y-down → GLB Y-up: negate Y component.
+            # MediaPipe (X=cam-right, Y=down, Z=toward-cam) →
+            # joint-tree local space (X=char-left, Y=char-back, Z=char-down).
+            # The skeleton root sits under an Armature with +90° X rotation,
+            # so the joint-tree axes are: up=-Z, down=+Z, back=+Y, fwd=-Y.
+            # Negate Z because toward-camera in MP = char-backward (+JT_y),
+            # so toward-camera must map to -JT_y (char-forward).
+            # Mapping: JT_x = mp_x,  JT_y = -mp_z,  JT_z = mp_y.
             glb_dir = Vector3(
                 pos_b.x - pos_a.x,
-                -(pos_b.y - pos_a.y),
-                pos_b.z - pos_a.z,
+                -(pos_b.z - pos_a.z),
+                pos_b.y - pos_a.y,
             )
             if glb_dir.length() < 1e-8:
                 continue
