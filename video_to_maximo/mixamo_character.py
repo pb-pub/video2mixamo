@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
-from typing import List
+from typing import List, Dict, Tuple
 
 import numpy as np
 
@@ -54,6 +54,29 @@ _N_COMP_MAP = {
     "MAT2": 4,
     "MAT3": 9,
     "MAT4": 16,
+}
+
+_BONE_LM: Dict[str, Tuple[int, int]] = {
+    "Hips": (23, 24),  # root: position = midpoint(23,24)
+    "Spine": (23, 11),  # hip-mid → shoulder-mid  (1/3 rotation)
+    "Spine1": (23, 11),  # (1/3)
+    "Spine2": (23, 11),  # (1/3)
+    "Neck": (11, 0),  # shoulder-mid → nose
+    "Head": (0, 0),  # no direction — inherit
+    "LeftShoulder": (11, 11),  # no direction — inherit
+    "LeftArm": (11, 13),  # shoulder → elbow
+    "LeftForeArm": (13, 15),  # elbow → wrist
+    "LeftHand": (15, 15),
+    "RightShoulder": (12, 12),
+    "RightArm": (12, 14),
+    "RightForeArm": (14, 16),
+    "RightHand": (16, 16),
+    "LeftUpLeg": (23, 25),  # hip → knee
+    "LeftLeg": (25, 27),  # knee → ankle
+    "LeftFoot": (27, 31),  # ankle → foot_index
+    "RightUpLeg": (24, 26),
+    "RightLeg": (26, 28),
+    "RightFoot": (28, 32),
 }
 
 
@@ -112,7 +135,9 @@ class JointTree:
         # Rest-pose local rotation per node (one Quaternion per node).
         # Identity is used for nodes with no rotation set.
         self.rest_rotations: List[Quaternion] = [
-            Quaternion.from_list(n.rotation) if n.rotation is not None else Quaternion.identity()
+            Quaternion.from_list(n.rotation)
+            if n.rotation is not None
+            else Quaternion.identity()
             for n in nodes
         ]
 
@@ -172,7 +197,9 @@ class JointTree:
         for idx, _ in self.walk():
             p = self.parent(idx)
             result[idx] = (
-                self.rest_rotations[idx] if p is None else result[p] * self.rest_rotations[idx]
+                self.rest_rotations[idx]
+                if p is None
+                else result[p] * self.rest_rotations[idx]
             )
         return result
 
@@ -292,7 +319,7 @@ class MixamoCharacter:
         if not all_verts:
             raise ValueError(f"No mesh geometry found in {self.glb_path}")
 
-        glb_verts = np.concatenate(all_verts, axis=0)         # (N,3) Y-up GLB space
+        glb_verts = np.concatenate(all_verts, axis=0)  # (N,3) Y-up GLB space
         self.faces = np.concatenate(all_faces, axis=0).astype(np.int32)  # (F,3)
 
         # GLB (Y-up) → display (Z-up): disp = [-X, -Z, +Y]
@@ -301,14 +328,14 @@ class MixamoCharacter:
         ).astype(np.float32)
 
         # ---- LBS skinning data (Steps 2-4, used when animating) ----
-        skin_complete = (
-            all_joints
-            and len(all_joints) == len(all_verts)
-            and gltf.skins
-        )
+        skin_complete = all_joints and len(all_joints) == len(all_verts) and gltf.skins
         if skin_complete:
-            self._skin_joints = np.concatenate(all_joints, axis=0).astype(np.uint16)    # (N,4)
-            self._skin_weights = np.concatenate(all_weights, axis=0).astype(np.float32) # (N,4)
+            self._skin_joints = np.concatenate(all_joints, axis=0).astype(
+                np.uint16
+            )  # (N,4)
+            self._skin_weights = np.concatenate(all_weights, axis=0).astype(
+                np.float32
+            )  # (N,4)
             self._glb_verts = glb_verts  # bind-pose verts kept for LBS deformation
 
             skin = gltf.skins[0]
@@ -341,6 +368,117 @@ class MixamoCharacter:
                 f"  Available node names: {available}"
             )
         return JointTree(self._gltf_nodes, root_idx)
+
+    # ------------------------------------------------------------------
+    # Step 2 — Compute rotations from MediaPipe landmarks
+    # ------------------------------------------------------------------
+
+    def compute_pose_rotations(
+        self, landmarks: List[Vector3]
+    ) -> Dict[str, Quaternion]:
+        """Compute per-joint local rotations from MediaPipe world landmarks.
+
+        Processes joints in DFS root-to-leaf order so every parent's pose
+        world rotation is ready before its children are evaluated.
+
+        For each bone mapped in ``_BONE_LM``:
+
+        * Extract the two landmark positions (``lm_a``, ``lm_b``) and build a
+          direction vector in GLB Y-up space (MediaPipe is Y-down, so Y is
+          negated).
+        * Identify the bone direction as the vector from this joint to its
+          first child, rotated by the rest-pose world rotation of this joint.
+        * Compute the shortest-arc (swing-only) quaternion from the rest bone
+          direction to the target direction.
+        * Apply the swing on top of the rest-pose world rotation to preserve
+          the rest-pose twist around the bone axis.
+        * Convert back to a local rotation relative to the parent's accumulated
+          *pose* world rotation.
+
+        Bones with ``lm_a == lm_b`` (no directional target) and Hips (whose
+        ``_BONE_LM`` entry encodes position, not direction) are skipped; their
+        rest local rotation is inherited unchanged via FK propagation.
+
+        Parameters
+        ----------
+        landmarks : list of Vector3
+            MediaPipe world landmarks (Y-down, X-right, Z-toward-camera).
+            Must contain at least 33 entries (indices 0-32 used by _BONE_LM).
+
+        Returns
+        -------
+        dict[str, Quaternion]
+            Maps Mixamo bone name (no ``"mixamorig:"`` prefix) to the new
+            local rotation quaternion.  Bones without a directional target are
+            omitted; callers should fall back to the rest local rotation.
+        """
+        if not self.can_animate:
+            return {}
+
+        # Rest-pose world rotations (constant, computed once per call).
+        rest_world_rots = self.joint_tree.world_rotations()
+
+        n = len(self.joint_tree._nodes)
+        pose_world_rots: List[Quaternion] = [Quaternion.identity()] * n
+        result: Dict[str, Quaternion] = {}
+
+        for idx, _ in self.joint_tree.walk():
+            p = self.joint_tree.parent(idx)
+            q_parent = pose_world_rots[p] if p is not None else Quaternion.identity()
+            rest_local = self.joint_tree.rest_rotations[idx]
+
+            # Default propagation: parent pose * rest local (no change from rest).
+            pose_world_rots[idx] = q_parent * rest_local
+
+            node_name = self.joint_tree.name(idx)
+            bone_key = node_name.replace("mixamorig:", "")
+
+            if bone_key not in _BONE_LM:
+                continue
+
+            lm_a, lm_b = _BONE_LM[bone_key]
+
+            # Hips entry encodes root position (midpoint of lm_a/lm_b), not a
+            # bone direction — skip rotation for this joint.
+            if bone_key == "Hips" or lm_a == lm_b:
+                continue
+
+            pos_a = landmarks[lm_a]
+            pos_b = landmarks[lm_b]
+
+            # MediaPipe Y-down → GLB Y-up: negate Y component.
+            glb_dir = Vector3(
+                pos_b.x - pos_a.x,
+                -(pos_b.y - pos_a.y),
+                pos_b.z - pos_a.z,
+            )
+            if glb_dir.length() < 1e-8:
+                continue
+            target_dir = glb_dir.normalize()
+
+            # Bone direction = this joint → its first child, in rest world space.
+            children = self.joint_tree.children(idx)
+            if not children:
+                continue  # Leaf joint — no outgoing bone to align.
+
+            child_t = self.joint_tree.node(children[0]).translation or [0.0, 0.0, 0.0]
+            child_local = Vector3(child_t[0], child_t[1], child_t[2])
+            if child_local.length() < 1e-8:
+                continue
+            child_local_dir = child_local.normalize()
+
+            rest_bone_world_dir = rest_world_rots[idx].rotate(child_local_dir)
+
+            # Shortest-arc swing from rest direction to target direction.
+            q_swing = Quaternion.from_two_vectors(rest_bone_world_dir, target_dir)
+
+            # Swing is applied in world space; rest-pose twist is preserved.
+            pose_world_rots[idx] = q_swing * rest_world_rots[idx]
+
+            # Local rotation relative to the parent's accumulated pose rotation.
+            result[bone_key] = q_parent.inverse() * pose_world_rots[idx]
+
+        return result
 
     # ------------------------------------------------------------------
     # Preview

@@ -24,6 +24,9 @@ dependencies = [
 [project.scripts]
 download-models = "scripts.download_models:main"
 
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
 [project.urls]
 Homepage = "https://github.com/pb-pub/video2mixamo"
 Documentation = "https://github.com/pb-pub/video2mixamo#readme"
