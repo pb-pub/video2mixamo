@@ -1,70 +1,216 @@
 """
 Mixamo character GLB loader with real-time Linear Blend Skinning (LBS).
 
-Loads a GLB/glTF2 file exported from Mixamo, extracts the skinned mesh
-and skeleton, and deforms the mesh each frame from MediaPipe world landmarks.
+Pipeline
+--------
+1. Load  — parse the GLB file; extract mesh, skeleton, and rest-pose bone
+           direction vectors for every joint.
+2. Diff  — per frame: for each mapped joint, measure the delta rotation
+           from its rest-pose direction to the current MediaPipe direction.
+3. Apply — propagate delta rotations through the joint hierarchy and build
+           per-joint skin matrices.
+4. Draw  — apply LBS to the bind-pose mesh; return vertices in display space.
 
 Coordinate systems
 ------------------
-* MediaPipe world landmarks: X=right, Y=DOWN, Z=toward-camera  (Y-down)
-* GLB / Mixamo bind pose:    X=right, Y=UP,   Z=forward         (Y-up)
-* pyqtgraph display:         X=right, Y=depth, Z=UP             (Z-up)
+  MediaPipe world landmarks : X=right, Y=DOWN, Z=toward-camera  (Y-down)
+  GLB / Mixamo bind pose    : X=right, Y=UP,   Z=forward         (Y-up)
+  pyqtgraph display         : X=right, Y=depth, Z=UP             (Z-up)
 
 Conversions::
-
-    glb  = [ mp_X,  -mp_Y,  mp_Z ]   (flip Y to go Y-down → Y-up)
-    disp = [-glb_X, -glb_Z, +glb_Y]  (mirror X, swap depth/up)
-
-Usage::
-
-    char = MixamoCharacter("character.glb")
-    # Static T-pose:
-    char.vertices, char.faces        # display-space, passed to viz3d once
-
-    # Animated (per frame, when can_animate is True):
-    verts = char.compute_skinned_vertices(landmarks)  # (N,3) float32
-    viz.update_mesh(verts, char.faces)
+    glb  = [mp_X, -mp_Y, mp_Z]       flip Y: Y-down → Y-up
+    disp = [-glb_X, -glb_Z, +glb_Y]  mirror X, swap depth/up
 """
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import List
 
 import numpy as np
 
+from video_to_maximo.quaternion import Quaternion
+from video_to_maximo.vector import Vector3
+
+
 # ---------------------------------------------------------------------------
-# MediaPipe landmark index → Mixamo bone mapping
+# Internal helpers
 # ---------------------------------------------------------------------------
-# Keys are bare bone names (no "mixamorig:" prefix).
-# Values: (start_lm, end_lm) — direction lm[end]-lm[start] defines bone axis.
-# start == end → no rotation change (bone inherits parent).
-# All indices are MediaPipe Pose landmark indices (0-32).
-# ---------------------------------------------------------------------------
-_BONE_LM: Dict[str, Tuple[int, int]] = {
-    "Hips": (23, 24),  # root: position = midpoint(23,24)
-    "Spine": (23, 11),  # hip-mid → shoulder-mid  (1/3 rotation)
-    "Spine1": (23, 11),  # (1/3)
-    "Spine2": (23, 11),  # (1/3)
-    "Neck": (11, 0),  # shoulder-mid → nose
-    "Head": (0, 0),  # no direction — inherit
-    "LeftShoulder": (11, 11),  # no direction — inherit
-    "LeftArm": (11, 13),  # shoulder → elbow
-    "LeftForeArm": (13, 15),  # elbow → wrist
-    "LeftHand": (15, 15),
-    "RightShoulder": (12, 12),
-    "RightArm": (12, 14),
-    "RightForeArm": (14, 16),
-    "RightHand": (16, 16),
-    "LeftUpLeg": (23, 25),  # hip → knee
-    "LeftLeg": (25, 27),  # knee → ankle
-    "LeftFoot": (27, 31),  # ankle → foot_index
-    "RightUpLeg": (24, 26),
-    "RightLeg": (26, 28),
-    "RightFoot": (28, 32),
+
+_DTYPE_MAP = {
+    5120: np.int8,
+    5121: np.uint8,
+    5122: np.int16,
+    5123: np.uint16,
+    5125: np.uint32,
+    5126: np.float32,
+}
+_N_COMP_MAP = {
+    "SCALAR": 1,
+    "VEC2": 2,
+    "VEC3": 3,
+    "VEC4": 4,
+    "MAT2": 4,
+    "MAT3": 9,
+    "MAT4": 16,
 }
 
-_SPINE_BONES = {"Spine", "Spine1", "Spine2"}
+
+def _read_accessor(gltf, blob: bytes, acc_idx: int) -> np.ndarray:
+    """Read a glTF accessor from *blob* into a numpy array (always 2-D)."""
+    acc = gltf.accessors[acc_idx]
+    bv = gltf.bufferViews[acc.bufferView]
+
+    dtype = _DTYPE_MAP[acc.componentType]
+    n_comp = _N_COMP_MAP[acc.type]
+    count = acc.count
+    itemsize = np.dtype(dtype).itemsize * n_comp
+
+    bv_offset = bv.byteOffset or 0
+    acc_offset = acc.byteOffset or 0
+    stride = bv.byteStride or itemsize
+
+    if stride == itemsize:
+        start = bv_offset + acc_offset
+        raw = blob[start : start + count * itemsize]
+        return np.frombuffer(raw, dtype=dtype).reshape(count, n_comp).copy()
+
+    # Interleaved buffer view — slower path
+    result = np.zeros((count, n_comp), dtype=dtype)
+    for i in range(count):
+        off = bv_offset + acc_offset + i * stride
+        result[i] = np.frombuffer(blob[off : off + itemsize], dtype=dtype)
+    return result
+
+
+# ---------------------------------------------------------------------------
+# JointTree — thin wrapper over the flat gltf.nodes list
+# ---------------------------------------------------------------------------
+
+
+class JointTree:
+    """
+    Read-only view over the flat pygltflib Node list, rooted at a named joint.
+
+    The underlying node list is kept as-is; no data is copied.  Navigation
+    methods delegate back to each node's ``children`` index list.
+
+    Attributes
+    ----------
+    root_idx : int  — index of the root joint ("mixamorig:Hips") in the node list.
+    """
+
+    def __init__(self, nodes: list, root_idx: int) -> None:
+        self._nodes = nodes
+        self.root_idx = root_idx
+        # Build a reverse parent map in O(N) so parent() is O(1).
+        self._parent: dict[int, int] = {}
+        for i, node in enumerate(nodes):
+            for child in node.children or []:
+                self._parent[child] = i
+        # Rest-pose local rotation per node (one Quaternion per node).
+        # Identity is used for nodes with no rotation set.
+        self.rest_rotations: List[Quaternion] = [
+            Quaternion.from_list(n.rotation) if n.rotation is not None else Quaternion.identity()
+            for n in nodes
+        ]
+
+    # --- accessors ---
+
+    def node(self, idx: int):
+        """Return the raw pygltflib Node at *idx*."""
+        return self._nodes[idx]
+
+    def name(self, idx: int) -> str:
+        """Return the name of the node at *idx* (empty string if unnamed)."""
+        return self._nodes[idx].name or ""
+
+    def children(self, idx: int) -> List[int]:
+        """Return child node indices of *idx*."""
+        return list(self._nodes[idx].children or [])
+
+    def parent(self, idx: int) -> int | None:
+        """Return parent node index of *idx*, or None for the root."""
+        return self._parent.get(idx)
+
+    def rest_rotation(self, idx: int) -> Quaternion:
+        """Return the rest-pose rotation for node *idx*."""
+        return self.rest_rotations[idx]
+
+    def find(self, name: str) -> int | None:
+        """Return the index of the first node whose name equals *name*."""
+        for i, n in enumerate(self._nodes):
+            if n.name == name:
+                return i
+        return None
+
+    # --- traversal ---
+
+    def walk(self, start: int | None = None):
+        """Depth-first generator yielding *(node_idx, depth)* from *start*.
+
+        Default start is ``root_idx``.
+        """
+        stack = [(self.root_idx if start is None else start, 0)]
+        while stack:
+            idx, depth = stack.pop()
+            yield idx, depth
+            for child in reversed(self.children(idx)):
+                stack.append((child, depth + 1))
+
+    # --- forward kinematics ---
+
+    def world_rotations(self) -> List[Quaternion]:
+        """Return world-space rotation for every node via FK (root → leaf).
+
+        Accumulates ``q_world[child] = q_world[parent] * q_local[child]``
+        using the DFS order of ``walk()``, which always yields a parent
+        before its children. Nodes outside the joint subtree keep identity.
+        """
+        result: List[Quaternion] = [Quaternion.identity()] * len(self._nodes)
+        for idx, _ in self.walk():
+            p = self.parent(idx)
+            result[idx] = (
+                self.rest_rotations[idx] if p is None else result[p] * self.rest_rotations[idx]
+            )
+        return result
+
+    def bone_direction(self, idx: int, world_rots: List[Quaternion]) -> Vector3:
+        """World-space direction from parent joint to *idx* (the bone vector).
+
+        Uses the node's translation (parent-local offset) rotated by the
+        parent's world rotation.  Falls back to (0,1,0) for the root or
+        zero-length translations.
+        """
+        t = self._nodes[idx].translation or [0.0, 0.0, 0.0]
+        local = Vector3(t[0], t[1], t[2])
+        length = local.length()
+        if length < 1e-8:
+            return Vector3(0.0, 1.0, 0.0)
+        local_dir = local / length
+        p = self.parent(idx)
+        if p is None:
+            return local_dir
+        return world_rots[p].rotate(local_dir)
+
+    # --- display ---
+
+    def print_tree(self, start: int | None = None) -> None:
+        """Print the joint hierarchy as an indented tree."""
+        for idx, depth in self.walk(start):
+            print("  " * depth + self.name(idx))
+
+    def __repr__(self) -> str:
+        return (
+            f"JointTree(root={self.name(self.root_idx)!r}, "
+            f"total_nodes={len(self._nodes)})"
+        )
+
+
+# ---------------------------------------------------------------------------
+# MixamoCharacter
+# ---------------------------------------------------------------------------
 
 
 class MixamoCharacter:
@@ -73,389 +219,154 @@ class MixamoCharacter:
 
     Attributes
     ----------
-    vertices : (N,3) float32
-        T-pose mesh vertices in pyqtgraph display space.
-    faces : (F,3) int32
-        Triangle face indices (constant).
-    can_animate : bool
-        True if skin data was found and LBS is available.
+    vertices : (N,3) float32  — rest-pose mesh vertices in display space (Z-up).
+    faces    : (F,3) int32    — triangle face indices (constant).
+    can_animate : bool        — True when LBS skinning data is available.
     """
 
     def __init__(self, glb_path: str | Path) -> None:
         self.glb_path = Path(glb_path)
-
-        # Static T-pose mesh (display space)
-        self.vertices: np.ndarray
-        self.faces: np.ndarray
         self.can_animate: bool = False
-
-        # Skinning data (populated when can_animate)
-        self._bind_verts: np.ndarray  # (N,3) GLB space
-        self._joint_idx: np.ndarray  # (N,4) int32
-        self._joint_w: np.ndarray  # (N,4) float32
-        self._inv_bind: np.ndarray  # (J,4,4)
-        self._bind_world: np.ndarray  # (J,4,4)
-        self._jnames: List[str]  # bare bone names
-        self._jparent: List[int]  # -1 = root
-        self._jlocal_t: np.ndarray  # (J,3) bind-pose local translations
-        self._bind_dir: Dict[int, np.ndarray]
-        self._topo: List[int]
-
+        # Populated by _load()
+        self.vertices: np.ndarray = np.empty((0, 3), dtype=np.float32)
+        self.faces: np.ndarray = np.empty((0, 3), dtype=np.int32)
         self._load()
 
     # ------------------------------------------------------------------
-    # Static mesh (always available)
+    # Step 1 — Load
     # ------------------------------------------------------------------
 
     def _load(self) -> None:
+        """Parse the GLB and populate mesh + optional LBS skinning data."""
         try:
             from pygltflib import GLTF2
         except ImportError as exc:
-            raise ImportError("pygltflib required: pip install pygltflib") from exc
+            raise ImportError(
+                "pygltflib is required to load GLB files.\n"
+                "  Install with: pip install pygltflib"
+            ) from exc
+
+        if not self.glb_path.exists():
+            raise FileNotFoundError(f"GLB file not found: {self.glb_path}")
 
         gltf = GLTF2().load(str(self.glb_path))
-        blob: Optional[bytes] = gltf.binary_blob()
-        if blob is None:
-            raise ValueError(f"{self.glb_path.name}: no binary buffer.")
 
-        self._load_mesh(gltf, blob)
+        # GLB embedded binary chunk; external URI buffers are not supported.
+        blob: bytes = gltf.binary_blob() or b""
 
-        if gltf.skins:
-            try:
-                self._load_skeleton(gltf, blob)
-                self.can_animate = True
-            except Exception as exc:
-                print(
-                    f"[MixamoCharacter] Skeleton load failed ({exc}); static display only."
-                )
-
-        status = "animatable" if self.can_animate else "static only"
-        print(
-            f"[MixamoCharacter] {self.glb_path.name}: "
-            f"{len(self.vertices):,} verts, {len(self.faces):,} faces — {status}"
-        )
-
-    def _load_mesh(self, gltf, blob: bytes) -> None:
-        """Collect all mesh primitives and merge into one static T-pose mesh."""
-        all_v: List[np.ndarray] = []
-        all_f: List[np.ndarray] = []
-        all_ji: List[np.ndarray] = []
-        all_jw: List[np.ndarray] = []
-        v_off = 0
+        all_verts: List[np.ndarray] = []
+        all_faces: List[np.ndarray] = []
+        all_joints: List[np.ndarray] = []
+        all_weights: List[np.ndarray] = []
+        vertex_offset = 0
 
         for mesh in gltf.meshes:
             for prim in mesh.primitives:
-                a = prim.attributes
-                pos_idx = getattr(a, "POSITION", None)
-                if pos_idx is None:
+                if prim.attributes.POSITION is None:
                     continue
 
-                v = self._acc(gltf, blob, pos_idx).astype(np.float32)
+                verts = _read_accessor(gltf, blob, prim.attributes.POSITION)  # (N,3)
 
                 if prim.indices is not None:
-                    f = (
-                        self._acc(gltf, blob, prim.indices)
-                        .reshape(-1, 3)
-                        .astype(np.int32)
-                    )
+                    idx = _read_accessor(gltf, blob, prim.indices).reshape(-1)
+                    faces = idx.reshape(-1, 3).astype(np.int32) + vertex_offset
                 else:
-                    f = np.arange(len(v), dtype=np.int32).reshape(-1, 3)
+                    n = len(verts)
+                    faces = np.arange(n, dtype=np.int32).reshape(-1, 3) + vertex_offset
 
-                all_v.append(v)
-                all_f.append(f + v_off)
-                v_off += len(v)
+                all_verts.append(verts.astype(np.float32))
+                all_faces.append(faces)
 
-                j0 = getattr(a, "JOINTS_0", None)
-                w0 = getattr(a, "WEIGHTS_0", None)
-                if j0 is not None and w0 is not None:
-                    all_ji.append(self._acc(gltf, blob, j0).astype(np.int32))
-                    all_jw.append(self._acc(gltf, blob, w0).astype(np.float32))
-                else:
-                    N = len(v)
-                    all_ji.append(np.zeros((N, 4), dtype=np.int32))
-                    all_jw.append(np.ones((N, 4), dtype=np.float32) * 0.25)
-
-        if not all_v:
-            raise ValueError(f"{self.glb_path.name}: no POSITION found.")
-
-        verts = np.concatenate(all_v, axis=0)
-        faces = np.concatenate(all_f, axis=0)
-        self._bind_verts = verts.astype(np.float64)
-        self._joint_idx = np.concatenate(all_ji, axis=0)
-        self._joint_w = np.concatenate(all_jw, axis=0).astype(np.float64)
-        self.faces = faces
-
-        # T-pose display vertices: GLB Y-up → display Z-up
-        self.vertices = _to_display(verts)
-
-    # ------------------------------------------------------------------
-    # Skeleton (only when skin present)
-    # ------------------------------------------------------------------
-
-    def _load_skeleton(self, gltf, blob: bytes) -> None:
-        skin = gltf.skins[0]
-
-        # ---- joint names ------------------------------------------------
-        node_to_j: Dict[int, int] = {}
-        self._jnames = []
-        for ji, ni in enumerate(skin.joints):
-            raw = gltf.nodes[ni].name or f"joint_{ji}"
-            name = raw.removeprefix("mixamorig:").removeprefix("mixamorig_")
-            self._jnames.append(name)
-            node_to_j[ni] = ji
-
-        # ---- parent map -------------------------------------------------
-        node_parent: Dict[int, int] = {}
-        for ni, node in enumerate(gltf.nodes):
-            for ci in node.children or []:
-                node_parent[ci] = ni
-
-        self._jparent = []
-        for ni in skin.joints:
-            pni = node_parent.get(ni, -1)
-            self._jparent.append(node_to_j.get(pni, -1))
-
-        # ---- inverse bind matrices (column-major in glTF → transpose) ---
-        raw = self._acc(gltf, blob, skin.inverseBindMatrices)
-        self._inv_bind = raw.astype(np.float64).reshape(-1, 4, 4).transpose(0, 2, 1)
-
-        J = len(self._jnames)
-        self._bind_world = np.array([np.linalg.inv(m) for m in self._inv_bind])
-
-        # ---- local translations (bone offsets from parent) --------------
-        self._jlocal_t = np.zeros((J, 3), dtype=np.float64)
-        for j in range(J):
-            p = self._jparent[j]
-            if p >= 0:
-                local = np.linalg.inv(self._bind_world[p]) @ self._bind_world[j]
-                self._jlocal_t[j] = local[:3, 3]
-            else:
-                self._jlocal_t[j] = self._bind_world[j][:3, 3]
-
-        # ---- topological order ------------------------------------------
-        self._topo = _topo_sort(self._jparent)
-
-        # ---- bind-pose directions (joint → first child) -----------------
-        children: Dict[int, List[int]] = {}
-        for j, p in enumerate(self._jparent):
-            if p >= 0:
-                children.setdefault(p, []).append(j)
-
-        self._bind_dir = {}
-        for j in range(J):
-            kids = children.get(j, [])
-            if kids:
-                d = self._bind_world[kids[0]][:3, 3] - self._bind_world[j][:3, 3]
-            else:
-                p = self._jparent[j]
-                d = (
-                    self._bind_dir[p].copy()
-                    if p >= 0 and p in self._bind_dir
-                    else np.array([0.0, 1.0, 0.0])
+                has_skin = (
+                    prim.attributes.JOINTS_0 is not None
+                    and prim.attributes.WEIGHTS_0 is not None
                 )
-            n = np.linalg.norm(d)
-            self._bind_dir[j] = d / n if n > 1e-8 else np.array([0.0, 1.0, 0.0])
+                if has_skin:
+                    j = _read_accessor(gltf, blob, prim.attributes.JOINTS_0)
+                    w = _read_accessor(gltf, blob, prim.attributes.WEIGHTS_0)
+                    all_joints.append(j)
+                    all_weights.append(w)
+
+                vertex_offset += len(verts)
+
+        if not all_verts:
+            raise ValueError(f"No mesh geometry found in {self.glb_path}")
+
+        glb_verts = np.concatenate(all_verts, axis=0)         # (N,3) Y-up GLB space
+        self.faces = np.concatenate(all_faces, axis=0).astype(np.int32)  # (F,3)
+
+        # GLB (Y-up) → display (Z-up): disp = [-X, -Z, +Y]
+        self.vertices = np.column_stack(
+            [-glb_verts[:, 0], -glb_verts[:, 2], glb_verts[:, 1]]
+        ).astype(np.float32)
+
+        # ---- LBS skinning data (Steps 2-4, used when animating) ----
+        skin_complete = (
+            all_joints
+            and len(all_joints) == len(all_verts)
+            and gltf.skins
+        )
+        if skin_complete:
+            self._skin_joints = np.concatenate(all_joints, axis=0).astype(np.uint16)    # (N,4)
+            self._skin_weights = np.concatenate(all_weights, axis=0).astype(np.float32) # (N,4)
+            self._glb_verts = glb_verts  # bind-pose verts kept for LBS deformation
+
+            skin = gltf.skins[0]
+            self._joint_nodes: List[int] = skin.joints
+
+            if skin.inverseBindMatrices is not None:
+                ibm = _read_accessor(gltf, blob, skin.inverseBindMatrices)  # (J,16)
+                self._inv_bind_matrices = ibm.reshape(-1, 4, 4).astype(np.float32)
+            else:
+                n_j = len(self._joint_nodes)
+                self._inv_bind_matrices = np.tile(
+                    np.eye(4, dtype=np.float32), (n_j, 1, 1)
+                )
+
+            self._gltf_nodes = gltf.nodes
+            self.joint_tree = self._build_joint_tree()
+            self.can_animate = True
+
+    def _build_joint_tree(self) -> JointTree:
+        """Locate 'mixamorig:Hips' and return a JointTree rooted there."""
+        root_name = "mixamorig:Hips"
+        root_idx = next(
+            (i for i, n in enumerate(self._gltf_nodes) if n.name == root_name),
+            None,
+        )
+        if root_idx is None:
+            available = [n.name for n in self._gltf_nodes if n.name]
+            raise ValueError(
+                f"Root joint {root_name!r} not found in GLB.\n"
+                f"  Available node names: {available}"
+            )
+        return JointTree(self._gltf_nodes, root_idx)
+
+    # ------------------------------------------------------------------
+    # Preview
+    # ------------------------------------------------------------------
+
+    def preview(self) -> None:
+        """Open an interactive 3D window showing the character in rest/T-pose.
+
+        Blocks until the window is closed or Ctrl-C is pressed.
+        """
+        from video_to_maximo.viz3d import Pose3DVisualizer
 
         print(
-            f"[MixamoCharacter]   {J} joints, "
-            f"root bind pos={self._bind_world[self._topo[0]][:3, 3]}"
+            f"[MixamoCharacter] Rest-pose preview\n"
+            f"  File     : {self.glb_path}\n"
+            f"  Vertices : {len(self.vertices):,}\n"
+            f"  Faces    : {len(self.faces):,}\n"
+            f"  LBS data : {'available' if self.can_animate else 'not found'}\n"
+            f"  Close the window or press Ctrl-C to exit."
         )
 
-    # ------------------------------------------------------------------
-    # Runtime: LBS animation
-    # ------------------------------------------------------------------
+        viz = Pose3DVisualizer(character_mesh=(self.vertices, self.faces))
+        viz.open()
 
-    def compute_skinned_vertices(self, landmarks: List[List[float]]) -> np.ndarray:
-        """
-        Deform the mesh using MediaPipe landmarks + LBS.
-
-        Parameters
-        ----------
-        landmarks : 33×[x,y,z] MediaPipe world landmarks (Y-down, metres).
-
-        Returns
-        -------
-        np.ndarray (N,3) float32 — vertices in pyqtgraph display space.
-        """
-        # Convert MediaPipe (Y-down) → GLB space (Y-up) for direction vectors.
-        # Only Y is flipped; X and Z stay the same.
-        lm = np.asarray(landmarks, dtype=np.float64)
-        lg = lm.copy()
-        lg[:, 1] = -lm[:, 1]  # flip Y: MediaPipe Y-down → GLB Y-up
-
-        J = len(self._jnames)
-        world_R = np.zeros((J, 3, 3))
-        world_mat = np.tile(np.eye(4), (J, 1, 1)).astype(np.float64)
-
-        # Root stays at its bind-pose world position.
-        # MediaPipe always reports hips at (0,0,0), so we can't use it for
-        # absolute positioning — it would shift the entire skeleton away from
-        # the bind-pose origin and collapse all skin matrices into a "ball".
-        root_bind_pos = self._bind_world[self._topo[0]][:3, 3]
-
-        # Spine direction (shared across 3 spine bones)
-        sp_d = (lg[11] + lg[12]) / 2.0 - (lg[23] + lg[24]) / 2.0
-        sp_n = np.linalg.norm(sp_d)
-        sp_dir = sp_d / sp_n if sp_n > 1e-8 else None
-
-        for j in self._topo:
-            name = self._jnames[j]
-            p = self._jparent[j]
-            Rbw = self._bind_world[j][:3, :3].copy()
-            db = self._bind_dir[j]
-            mapping = _BONE_LM.get(name)
-
-            if mapping and mapping[0] != mapping[1]:
-                sl, el = mapping
-                if name in _SPINE_BONES:
-                    if sp_dir is not None:
-                        Rf = _rot_between(db, sp_dir)
-                        Rcur = _slerp(np.eye(3), Rf, 1.0 / 3.0) @ Rbw
-                    else:
-                        Rcur = Rbw
-                else:
-                    dv = lg[el] - lg[sl]
-                    n = np.linalg.norm(dv)
-                    Rcur = (_rot_between(db, dv / n) @ Rbw) if n > 1e-8 else Rbw
-            else:
-                Rcur = Rbw
-
-            world_R[j] = Rcur
-
-            if p < 0:
-                # Root bone: use bind-pose position, only rotation is driven
-                world_mat[j, :3, :3] = Rcur
-                world_mat[j, :3, 3] = root_bind_pos
-                world_mat[j, 3, 3] = 1.0
-            else:
-                Rloc = world_R[p].T @ Rcur
-                lm4 = np.eye(4)
-                lm4[:3, :3] = Rloc
-                lm4[:3, 3] = self._jlocal_t[j]
-                world_mat[j] = world_mat[p] @ lm4
-
-        # Skin matrices
-        skin = np.einsum("jab,jbc->jac", world_mat, self._inv_bind)
-
-        # LBS
-        N = len(self._bind_verts)
-        vh = np.hstack([self._bind_verts, np.ones((N, 1))])
-        res = np.zeros((N, 4))
-        for k in range(4):
-            ji = self._joint_idx[:, k]
-            w = self._joint_w[:, k, None]
-            res += w * np.einsum("nij,nj->ni", skin[ji], vh)
-
-        return _to_display(res[:, :3].astype(np.float32))
-
-    # ------------------------------------------------------------------
-    # Accessor helper
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def _acc(gltf, blob: bytes, idx: int) -> np.ndarray:
-        """Read a glTF accessor into a numpy array."""
-        _DT = {
-            5120: np.int8,
-            5121: np.uint8,
-            5122: np.int16,
-            5123: np.uint16,
-            5125: np.uint32,
-            5126: np.float32,
-        }
-        _SZ = {
-            "SCALAR": 1,
-            "VEC2": 2,
-            "VEC3": 3,
-            "VEC4": 4,
-            "MAT2": 4,
-            "MAT3": 9,
-            "MAT4": 16,
-        }
-        a = gltf.accessors[idx]
-        bv = gltf.bufferViews[a.bufferView]
-        dtype = _DT[a.componentType]
-        n_comp = _SZ[a.type]
-        count = a.count
-        offset = (bv.byteOffset or 0) + (a.byteOffset or 0)
-        stride = bv.byteStride
-        if not stride:
-            data = np.frombuffer(blob, dtype=dtype, count=count * n_comp, offset=offset)
-        else:
-            rows = [
-                np.frombuffer(
-                    blob, dtype=dtype, count=n_comp, offset=offset + i * stride
-                )
-                for i in range(count)
-            ]
-            data = np.concatenate(rows)
-        return data.reshape(count, n_comp) if n_comp > 1 else data
-
-
-# ---------------------------------------------------------------------------
-# Module-level helpers
-# ---------------------------------------------------------------------------
-
-
-def _to_display(v: np.ndarray) -> np.ndarray:
-    """
-    GLB space (Y-up) → pyqtgraph display space (Z-up).
-
-    display X = −GLB X   (mirror)
-    display Y = −GLB Z   (depth)
-    display Z = +GLB Y   (Y-up → Z-up, no negation)
-    """
-    out = np.empty(v.shape, dtype=np.float32)
-    out[:, 0] = -v[:, 0]
-    out[:, 1] = -v[:, 2]
-    out[:, 2] = v[:, 1]
-    return out
-
-
-def _topo_sort(parents: List[int]) -> List[int]:
-    """Return joint indices, parents before children."""
-    n = len(parents)
-    visited = [False] * n
-    order: List[int] = []
-
-    def visit(j: int) -> None:
-        if visited[j]:
-            return
-        visited[j] = True
-        p = parents[j]
-        if p >= 0:
-            visit(p)
-        order.append(j)
-
-    for j in range(n):
-        visit(j)
-    return order
-
-
-def _rot_between(a: np.ndarray, b: np.ndarray) -> np.ndarray:
-    """3×3 rotation matrix rotating unit vector a onto unit vector b."""
-    a = a / (np.linalg.norm(a) + 1e-12)
-    b = b / (np.linalg.norm(b) + 1e-12)
-    dot = float(np.dot(a, b))
-    if dot >= 0.99999:
-        return np.eye(3)
-    if dot <= -0.99999:
-        perp = np.array([0.0, 0.0, 1.0])
-        if abs(a[2]) > 0.9:
-            perp = np.array([0.0, 1.0, 0.0])
-        axis = np.cross(a, perp)
-        axis /= np.linalg.norm(axis)
-        return 2.0 * np.outer(axis, axis) - np.eye(3)
-    axis = np.cross(a, b)
-    K = np.array(
-        [[0, -axis[2], axis[1]], [axis[2], 0, -axis[0]], [-axis[1], axis[0], 0]]
-    )
-    return np.eye(3) + K + K @ K * (1.0 / (1.0 + dot))
-
-
-def _slerp(R0: np.ndarray, R1: np.ndarray, t: float) -> np.ndarray:
-    """Spherical linear interpolation between two rotation matrices."""
-    from scipy.spatial.transform import Rotation, Slerp
-
-    rots = Rotation.from_matrix(np.stack([R0, R1]))
-    return Slerp([0.0, 1.0], rots)(t).as_matrix()
+        try:
+            while viz.is_running:
+                time.sleep(0.1)
+        except KeyboardInterrupt:
+            viz.close()
