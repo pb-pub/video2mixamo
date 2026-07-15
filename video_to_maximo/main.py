@@ -3,17 +3,26 @@
 """
 Main CLI entry point for Video to Mixamo.
 
-Usage:
-    python main.py                          # Start webcam capture with preview
-    python main.py --camera 1               # Use camera 1
-    python main.py --input video.mp4        # Process video file
-    python main.py --input video.mp4 --output animation.bvh
-    python main.py --model models/my_model.task
+Default behavior: process an input video end-to-end and export a BVH
+animation file. The live preview / visualization is opt-in (--preview).
 
-Controls (in preview window):
-    R: Start/Stop recording
-    S: Stop recording (keep window open)
-    ESC: Quit without saving
+Usage:
+    python main.py --input video.mp4                     # Video -> BVH (default)
+    python main.py --input video.mp4 --output anim.bvh   # Choose output path
+    python main.py --input video.mp4 --preview           # Also show live preview
+    python main.py                                       # Webcam (interactive, press R)
+
+Modes:
+    - With --input FILE: batch conversion. Every frame is processed and the
+      whole clip is exported automatically. No interaction needed.
+    - Without --input (webcam): interactive recording. A preview window opens
+      and you press R to start/stop recording.
+
+Controls (interactive/preview window):
+    R: Start/Stop recording (webcam mode)
+    S: Stop recording
+    V: Toggle 3D skeleton viewer
+    ESC: Quit (aborts without saving)
 
 Options:
     --input FILE          Input video file (default: use webcam)
@@ -22,7 +31,7 @@ Options:
     --format FORMAT       Output format: bvh (default), fbx
     --model FILE          Path to MediaPipe .task model file
     --fps RATE            Frame rate (default: auto-detected or 30)
-    --no-preview          Disable live preview window
+    --preview             Show the live preview / visualization window
     --no-smooth           Disable temporal smoothing
     --smooth-cutoff C     One Euro min_cutoff (default: 1.0)
     --smooth-beta B       One Euro beta (default: 0.0)
@@ -31,20 +40,20 @@ Options:
     --help                Show this help message
 
 Examples:
-    # Webcam capture with preview, press R to record
-    python main.py
-
-    # Process video file with auto-generated output name
+    # Convert a video file to BVH (auto-generated output name)
     python main.py --input myvideo.mp4
 
-    # Full pipeline: video to BVH
+    # Convert with an explicit output path
     python main.py --input video.mp4 --output animation.bvh
 
-    # Disable smoothing for raw output
-    python main.py --no-smooth
+    # Convert while watching the live preview
+    python main.py --input video.mp4 --preview
 
-    # Custom model path
-    python main.py --model models/pose_landmarker_full.task
+    # Webcam capture (interactive), press R to record
+    python main.py --preview
+
+    # Disable smoothing for raw output
+    python main.py --input video.mp4 --no-smooth
 """
 
 import argparse
@@ -140,7 +149,14 @@ def parse_args() -> argparse.Namespace:
 
     # Processing options
     parser.add_argument(
-        "--no-preview", action="store_true", help="Disable live preview window"
+        "--preview",
+        action="store_true",
+        help="Show the live preview / visualization window (default: off for --input)",
+    )
+    parser.add_argument(
+        "--no-preview",
+        action="store_true",
+        help=argparse.SUPPRESS,  # deprecated: preview is now off by default
     )
     parser.add_argument(
         "--no-smooth", action="store_true", help="Disable temporal smoothing"
@@ -181,13 +197,20 @@ class VideoToMixamo:
         """Initialize the application."""
         self.args = args
 
+        # Resolve preview mode. Preview is opt-in for file conversion, but
+        # webcam mode is inherently interactive (needs the window to press R),
+        # so force it on there. --no-preview is kept as a deprecated override.
+        self.preview = bool(args.preview) and not args.no_preview
+        if not args.input and not args.no_preview:
+            self.preview = True
+
         # Get model path
         self.model_path = args.model or get_default_model_path()
 
         # Check/download model
         if not check_model_exists(self.model_path):
             if args.auto_download:
-                from config import DEFAULT_MODEL_URL
+                from .config import DEFAULT_MODEL_URL
 
                 if download_model(DEFAULT_MODEL_URL, self.model_path):
                     print("Model downloaded successfully")
@@ -348,10 +371,16 @@ class VideoToMixamo:
         """Stop recording and export."""
         self.recording = False
         print(f"Recording stopped: {self.frames_captured} frames captured")
+        self.export_recording()
 
+    def export_recording(self) -> Optional[str]:
+        """Export the recorded frames to an animation file.
+
+        Returns the output path on success, or None if nothing was exported.
+        """
         if self.frames_captured == 0:
             print("No frames recorded!")
-            return
+            return None
 
         # Export to BVH
         output_path = self.args.output or get_default_output_path()
@@ -376,7 +405,7 @@ class VideoToMixamo:
 
         if len(frame_rotations) == 0:
             print("No valid frames to export!")
-            return
+            return None
 
         # Export BVH
         try:
@@ -387,15 +416,78 @@ class VideoToMixamo:
                 fps=self.capture.fps if self.capture else 30.0,
             )
             print(f"Exported successfully: {output_path}")
+            return output_path
         except Exception as e:
             print(f"Export failed: {e}")
+            return None
 
     def run(self) -> None:
-        """Run the main application loop."""
+        """Run the application.
+
+        Dispatches to batch conversion (when an input file is given) or the
+        interactive webcam recorder (otherwise).
+        """
         if not self.initialize():
             sys.exit(1)
 
-        print("Starting video processing...")
+        if self.args.input:
+            self.run_batch()
+        else:
+            self.run_interactive()
+
+    def run_batch(self) -> None:
+        """Process an entire input video and export automatically.
+
+        This is the default path for file conversion: no interaction is
+        required. Every frame is processed and recorded, then the whole clip
+        is exported. A preview window is shown only when --preview is set;
+        press ESC in it to abort.
+        """
+        print(f"Converting '{self.args.input}' -> animation file...")
+        if self.preview:
+            print("Preview enabled. Press ESC to abort.")
+
+        self._fps_start_time = time.time()
+        self.start_recording()
+        aborted = False
+
+        try:
+            for frame, timestamp_ms in self.capture:
+                self.total_frames += 1
+                self._fps_frame_count += 1
+
+                if self._fps_frame_count % 30 == 0:
+                    elapsed = time.time() - self._fps_start_time
+                    if elapsed > 0:
+                        self._current_fps = self._fps_frame_count / elapsed
+                    print(
+                        f"  Processed {self.total_frames} frames "
+                        f"({self._current_fps:.1f} fps)..."
+                    )
+
+                success = self.process_frame(frame, timestamp_ms)
+                self.record_frame(frame, timestamp_ms)
+
+                if self.preview:
+                    self._draw_preview(frame, success, timestamp_ms)
+                    if (cv2.waitKey(1) & 0xFF) == 27:  # ESC aborts
+                        print("Aborted by user.")
+                        aborted = True
+                        break
+
+        except KeyboardInterrupt:
+            print("\nInterrupted by user")
+            aborted = True
+
+        finally:
+            self.recording = False
+            if not aborted:
+                self.export_recording()
+            self._cleanup()
+
+    def run_interactive(self) -> None:
+        """Run the interactive webcam loop (record on demand with R)."""
+        print("Starting webcam capture...")
         print("Controls:")
         print("  R: Start/Stop recording")
         print("  S: Stop recording (keep window open)")
@@ -419,7 +511,7 @@ class VideoToMixamo:
                 success = self.process_frame(frame, timestamp_ms)
 
                 # Draw visualization
-                if not self.args.no_preview:
+                if self.preview:
                     self._draw_preview(frame, success, timestamp_ms)
 
                 # Handle recording

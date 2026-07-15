@@ -95,7 +95,11 @@ class BVHExporter:
         # Get bone offset from parent (position in T-pose)
         offset = self._get_bone_offset(bone_name)
 
-        f.write(f"{indent}JOINT {bone_name}\n")
+        # The first bone in the hierarchy must be declared ROOT per the BVH
+        # spec; all descendants are JOINT. Blender and most parsers reject a
+        # file whose top-level bone is a JOINT.
+        keyword = "ROOT" if depth == 0 else "JOINT"
+        f.write(f"{indent}{keyword} {bone_name}\n")
         f.write(f"{indent}{{\n")
         f.write(f"{indent}    OFFSET {offset[0]:.6f} {offset[1]:.6f} {offset[2]:.6f}\n")
         f.write(f"{indent}    CHANNELS 6 Xposition Yposition Zposition ")
@@ -349,6 +353,31 @@ class BVHExporter:
         return [np.degrees(z), np.degrees(x), np.degrees(y)]
 
 
+def _augment_landmarks(lm):
+    """Augment 33 MediaPipe landmarks to the 40 the pipeline expects.
+
+    Mirrors the 7 derived points added in detector.py (_parse_result) so the
+    self-test feeds compute_rotations the same 40-landmark layout the real
+    pipeline produces. Uses plain-list math (no Vector3).
+    """
+
+    def mid(a, b):
+        return [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2]
+
+    def lerp(a, b, t):
+        return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t]
+
+    out = [list(p) for p in lm]
+    out.append(lerp(lm[17], lm[19], 1 / 3))  # 33
+    out.append(lerp(lm[18], lm[20], 1 / 3))  # 34
+    out.append(lerp(lm[17], lm[19], 2 / 3))  # 35
+    out.append(lerp(lm[18], lm[20], 2 / 3))  # 36
+    out.append(mid(lm[23], lm[24]))  # 37 bottom spine
+    out.append(mid(lm[11], lm[12]))  # 38 top spine / neck
+    out.append(mid(lm[7], lm[8]))  # 39 top neck / head
+    return out
+
+
 def test_exporter():
     """Test BVH exporter with sample data."""
     # Create sample rotation results
@@ -405,6 +434,9 @@ def test_exporter():
             if i in [12, 14, 16]:  # Right arm
                 new_lm[0] += 0.1 * frame_idx  # Move right arm outward
             test_landmarks.append(new_lm)
+
+        # The pipeline works on 40 augmented landmarks (33 base + 7 derived).
+        test_landmarks = _augment_landmarks(test_landmarks)
 
         result = computer.compute_rotations(
             test_landmarks, timestamp_ms=frame_idx * 1000 // 30
