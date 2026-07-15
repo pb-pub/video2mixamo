@@ -58,20 +58,23 @@ _N_COMP_MAP = {
 }
 
 _BONE_LM: Dict[str, Tuple[int, int]] = {
-    "Hips": (23, 24),  # root: position = midpoint(23,24)
-    "Spine": (23, 11),  # hip-mid → shoulder-mid  (1/3 rotation)
-    "Spine1": (23, 11),  # (1/3)
-    "Spine2": (23, 11),  # (1/3)
-    "Neck": (11, 0),  # shoulder-mid → nose
-    "Head": (0, 0),  # no direction — inherit
-    "LeftShoulder": (11, 11),  # no direction — inherit
+    "Hips": (37, 38),  # root: position = midpoint(23,24)
+    # Torso: only two spine points exist (37 hip-mid, 38 shoulder-mid), so
+    # the three spine joints all align to the same hip-mid → shoulder-mid
+    # direction. The torso leans/twists as a unit (it cannot curve — no
+    # mid-spine landmark exists to measure a bend from).
+    "Spine": (37, 38),
+    "Spine1": (37, 38),
+    "Spine2": (37, 38),
+    "Neck": (38, 39),  # shoulder-mid → nose
+    "LeftShoulder": (38, 11),  # no direction — inherit
     "LeftArm": (11, 13),  # shoulder → elbow
     "LeftForeArm": (13, 15),  # elbow → wrist
-    "LeftHand": (15, 15),
-    "RightShoulder": (12, 12),
+    "LeftHand": (15, 35),
+    "RightShoulder": (38, 12),
     "RightArm": (12, 14),
     "RightForeArm": (14, 16),
-    "RightHand": (16, 16),
+    "RightHand": (16, 36),
     "LeftUpLeg": (23, 25),  # hip → knee
     "LeftLeg": (25, 27),  # knee → ankle
     "LeftFoot": (27, 31),  # ankle → foot_index
@@ -414,8 +417,9 @@ class MixamoCharacter:
             MediaPipe world landmarks (Y-down, X-right, Z-toward-camera).
             Must contain at least 33 entries (indices 0-32 used by _BONE_LM).
         visibility : list of float, optional
-            Per-landmark visibility scores [0, 1] for at least the 33 base
-            landmarks.  When provided, bones whose driving landmarks are below
+            Per-landmark visibility scores [0, 1] for all 40 landmarks (33
+            base + 7 augmented; augmented scores are the min of their source
+            landmarks).  When provided, bones whose driving landmarks are below
             *vis_threshold* fall back to their rest-pose rotation.
         vis_threshold : float
             Minimum visibility required for both driving landmarks before a

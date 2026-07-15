@@ -39,7 +39,8 @@ class PoseResult:
         timestamp_ms: Timestamp of the frame in milliseconds
         pose_landmarks: List of [x, y, z] for each of 40 landmarks (33 base + 7 augmented)
         pose_world_landmarks: List of [x, y, z] in meters (world coordinates) with 40 landmarks
-        visibility: List of visibility scores (0-1) for each of 33 base landmarks
+        visibility: List of visibility scores (0-1) for each of 40 landmarks
+            (33 base + 7 augmented; augmented = min of their source landmarks)
         segmentation_mask: Optional segmentation mask (H, W)
     """
 
@@ -49,7 +50,7 @@ class PoseResult:
     pose_world_landmarks: Optional[
         List[Vector3]
     ]  # 40 x [x, y, z] (33 base + 7 augmented)
-    visibility: Optional[List[float]]  # 33 visibility scores (base landmarks only)
+    visibility: Optional[List[float]]  # 40 visibility scores (33 base + 7 augmented)
     segmentation_mask: Optional[np.ndarray] = None
 
 
@@ -232,6 +233,20 @@ class PoseLandmarker:
         pose_world_landmarks.append(
             (pose_world_landmarks[7] + pose_world_landmarks[8]) / 2
         )
+
+        # Augment visibility (indices 33-39) using the SAME source landmarks as
+        # the position augmentations above. A derived point is only as reliable
+        # as its least-visible source, so take the min. This keeps the 40-entry
+        # visibility list aligned with the 40-entry landmark lists, so bones in
+        # _BONE_LM that are driven by augmented indices can pass the visibility
+        # gate in MixamoCharacter.compute_pose_rotations.
+        visibility.append(min(visibility[17], visibility[19]))  # 33
+        visibility.append(min(visibility[18], visibility[20]))  # 34
+        visibility.append(min(visibility[17], visibility[19]))  # 35
+        visibility.append(min(visibility[18], visibility[20]))  # 36
+        visibility.append(min(visibility[23], visibility[24]))  # 37 bottom spine
+        visibility.append(min(visibility[11], visibility[12]))  # 38 top spine/neck
+        visibility.append(min(visibility[7], visibility[8]))  # 39 top neck/head
 
         return PoseResult(
             success=True,
