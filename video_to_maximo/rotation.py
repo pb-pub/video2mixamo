@@ -76,16 +76,16 @@ class RotationComputer:
         Compute bone rotations from landmarks.
 
         Args:
-            landmarks: 33x3 list of [x, y, z] positions
+            landmarks: 40x3 list of [x, y, z] positions (33 base + 7 augmented)
             timestamp_ms: Timestamp in milliseconds
-            visibility: Optional list of 33 visibility scores (0-1). Bones
+            visibility: Optional list of 40 visibility scores (0-1). Bones
                 whose key landmarks fall below VISIBILITY_THRESHOLD reuse the
                 last valid rotation instead of a potentially garbage value.
 
         Returns:
             RotationResult with bone rotations
         """
-        if len(landmarks) != 33:
+        if len(landmarks) != 40:
             return RotationResult(
                 success=False,
                 timestamp_ms=timestamp_ms,
@@ -132,12 +132,15 @@ class RotationComputer:
         self, bone_name: str, visibility: Optional[List[float]]
     ) -> bool:
         """Return True if the bone's key landmarks meet the visibility threshold."""
-        if visibility is None or len(visibility) < 33:
+        if visibility is None or len(visibility) < 40:
             return True  # No visibility data — assume visible to preserve existing behaviour
         bone = self.skeleton.get_bone(bone_name)
         if bone is None:
             return True
-        return min(visibility[bone.start_landmark], visibility[bone.end_landmark]) >= VISIBILITY_THRESHOLD
+        return (
+            min(visibility[bone.start_landmark], visibility[bone.end_landmark])
+            >= VISIBILITY_THRESHOLD
+        )
 
     def _compute_world_rotations(
         self, positions: Dict[str, np.ndarray]

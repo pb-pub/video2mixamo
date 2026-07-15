@@ -63,6 +63,8 @@ from .rotation import RotationComputer
 from .exporter_bvh import BVHExporter
 from .filter import Smoother, FilterConfig
 from .viz3d import Pose3DVisualizer
+from .mixamo_character import MixamoCharacter
+from .vector import Vector3
 
 
 def get_default_output_path() -> str:
@@ -161,6 +163,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--auto-download", action="store_true", help="Auto-download missing model file"
     )
+    parser.add_argument(
+        "--character",
+        type=str,
+        default=None,
+        metavar="FILE",
+        help="Path to a Mixamo character GLB file for 3D preview animation",
+    )
 
     return parser.parse_args()
 
@@ -205,8 +214,24 @@ class VideoToMixamo:
         self.recorded_visibility: List[Optional[List[float]]] = []
         self._last_result: Optional[PoseResult] = None  # Store last detection result
 
+        # Optional Mixamo character — load before creating the visualizer
+        self._character: Optional[MixamoCharacter] = None
+        self._character_anim_error_logged = False
+        character_mesh = None
+        if getattr(args, "character", None):
+            try:
+                char = MixamoCharacter(args.character)
+                character_mesh = (char.vertices, char.faces)
+                if char.can_animate:
+                    self._character = char
+                    print(f"[character] Loaded {args.character} — LBS animation enabled")
+                else:
+                    print(f"[character] Loaded {args.character} — static only (no skinning data)")
+            except Exception as e:
+                print(f"[character] Failed to load {args.character}: {e}")
+
         # 3-D visualizer (opened on demand with V key)
-        self._viz3d = Pose3DVisualizer()
+        self._viz3d = Pose3DVisualizer(character_mesh=character_mesh)
 
         # Frame counters
         self.total_frames = 0
@@ -268,10 +293,10 @@ class VideoToMixamo:
             # Smooth landmarks
             landmarks = result.pose_world_landmarks
             if landmarks:
-                smoothed_landmarks = self.smoother.filter_landmarks(
-                    landmarks, timestamp_ms
-                )
-                result.pose_world_landmarks = smoothed_landmarks
+                smoothed = self.smoother.filter_landmarks(landmarks, timestamp_ms)
+                result.pose_world_landmarks = [
+                    Vector3(lm[0], lm[1], lm[2]) for lm in smoothed
+                ]
 
         # Feed 3-D visualizer if open
         if result.success and self._viz3d.is_running:
@@ -279,6 +304,20 @@ class VideoToMixamo:
                 result.pose_world_landmarks,
                 result.visibility,
             )
+            if self._character is not None:
+                try:
+                    pose_rots = self._character.compute_pose_rotations(
+                        result.pose_world_landmarks,
+                        visibility=result.visibility,
+                    )
+                    verts = self._character.apply_pose_rotations(pose_rots)
+                    self._viz3d.update_mesh(verts, self._character.faces)
+                except Exception as e:
+                    if not self._character_anim_error_logged:
+                        import traceback
+                        print(f"[character] Animation error: {e}")
+                        traceback.print_exc()
+                        self._character_anim_error_logged = True
 
         return result.success
 
@@ -325,7 +364,7 @@ class VideoToMixamo:
         valid_indices = []
 
         for i, landmarks in enumerate(self.recorded_landmarks):
-            if landmarks is not None and len(landmarks) == 33:
+            if landmarks is not None and len(landmarks) == 40:
                 rotation_result = rotation_computer.compute_rotations(
                     landmarks, self.recorded_timestamps[i], self.recorded_visibility[i]
                 )
