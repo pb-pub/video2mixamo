@@ -75,6 +75,7 @@ outputs/
 *.png
 *.bmp
 *.webp
+*.pdn
 
 # Logging
 logs/
